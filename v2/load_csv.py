@@ -101,15 +101,22 @@ def load_csv(csv_path: str, dry_run: bool = False, limit: int = 0) -> int:
 
     # ── Auto-detect format ────────────────────────────────────────────────
     cols = set(c.lower().strip() for c in rows[0].keys())
-    is_new_format = "timestamp" in cols and "mq135" not in cols
+    has_timestamp = "timestamp" in cols
+    has_mq = "mq135" in cols
+    has_uppercase_dust = "Dust" in rows[0].keys()
 
-    if is_new_format:
+    if has_timestamp and has_mq:
+        fmt = "full"  # Full format: timestamp,temperature,humidity,pressure,gas,dust,mq135,mq7,latitude,longitude
+        log.info("Detected FULL CSV format (timestamp + MQ135/MQ7 + GPS)")
+    elif has_timestamp and not has_mq:
+        fmt = "new"   # New format: no MQ columns
         log.info("Detected NEW CSV format (timestamp, real GPS coordinates)")
     else:
+        fmt = "old"   # Old format: Millis, uppercase columns
         log.info("Detected OLD CSV format (Millis, MQ135, MQ7)")
 
     # For old format: find columns with encoding-mangled names
-    if not is_new_format:
+    if fmt == "old":
         all_cols = rows[0].keys()
         def _find(prefix):
             for c in all_cols:
@@ -123,7 +130,21 @@ def load_csv(csv_path: str, dry_run: bool = False, limit: int = 0) -> int:
 
     for i, row in enumerate(rows):
         try:
-            if is_new_format:
+            if fmt == "full":
+                # Full format: all lowercase columns including mq135/mq7
+                payload = {
+                    "dust":        float(row.get("dust", 0) or 0),
+                    "mq135":       float(row.get("mq135", 0) or 0),
+                    "mq7":         float(row.get("mq7", 0) or 0),
+                    "temperature": float(row.get("temperature", 0) or 0),
+                    "humidity":    float(row.get("humidity", 0) or 0),
+                    "pressure":    float(row.get("pressure", 0) or 0),
+                    "gas":         float(row.get("gas", 0) or 0) * 1000,  # kΩ → Ω
+                    "latitude":    float(row.get("latitude", 0) or 0),
+                    "longitude":   float(row.get("longitude", 0) or 0),
+                }
+                ts_str = row.get("timestamp", "").strip()
+            elif fmt == "new":
                 # New format: timestamp,temperature,humidity,pressure,gas,dust,latitude,longitude
                 # gas is in kΩ, no MQ135/MQ7 columns
                 payload = {
@@ -137,7 +158,6 @@ def load_csv(csv_path: str, dry_run: bool = False, limit: int = 0) -> int:
                     "latitude":    float(row.get("latitude", 0) or 0),
                     "longitude":   float(row.get("longitude", 0) or 0),
                 }
-                # Use actual timestamp from CSV if available
                 ts_str = row.get("timestamp", "").strip()
             else:
                 # Old format: Millis,Dust,MQ135,MQ7,Temperature,Humidity,Pressure,Gas,Lat,Lon
@@ -162,8 +182,15 @@ def load_csv(csv_path: str, dry_run: bool = False, limit: int = 0) -> int:
             # Determine timestamp
             if ts_str:
                 try:
-                    # Parse "2/17/2026 22:13" format
-                    dt = datetime.strptime(ts_str, "%m/%d/%Y %H:%M")
+                    # Try multiple timestamp formats
+                    for fmt_str in ("%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M", "%Y-%m-%dT%H:%M:%S"):
+                        try:
+                            dt = datetime.strptime(ts_str, fmt_str)
+                            break
+                        except ValueError:
+                            continue
+                    else:
+                        raise ValueError(f"Unknown timestamp format: {ts_str}")
                     fake_time = dt.replace(tzinfo=timezone.utc).isoformat()
                 except ValueError:
                     fake_time = (base_time + timedelta(seconds=i * 5)).isoformat()
