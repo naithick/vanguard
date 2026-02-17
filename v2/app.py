@@ -4,6 +4,7 @@ GreenRoute Mesh v2 — API Server
 POST /api/ingest    — ESP32 sends raw sensor JSON → stored in raw_telemetry
 POST /api/process   — manually trigger processing of pending rows
 GET  /api/readings  — latest processed readings
+GET  /api/zones     — interpolated air-quality zone GeoJSON
 GET  /api/stats     — quick summary counts
 GET  /api/health    — health-check
 
@@ -27,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from supabase_client import db
 from processor import processor
+from zones import zone_builder
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -177,6 +179,58 @@ def get_readings():
 @app.route("/api/stats", methods=["GET"])
 def stats():
     return jsonify({"ok": True, **db.get_statistics()})
+
+
+# =============================================================================
+#  GET /api/zones  — interpolated air-quality zones (GeoJSON)
+# =============================================================================
+@app.route("/api/zones", methods=["GET"])
+def zones():
+    """
+    Return a GeoJSON FeatureCollection of interpolated air-quality zones.
+
+    Query params:
+      device_id  — filter by device  (optional)
+      limit      — max readings to use (default 200)
+      field      — which metric to interpolate (default: aqi_value)
+      mode       — "heatmap" (grid cells), "contours" (AQI bands),
+                   "points" (raw markers), or "all" (default: heatmap)
+      resolution — grid size NxN (default 30, max 80)
+      radius     — influence radius in metres (default 500)
+    """
+    device_id  = request.args.get("device_id")
+    limit      = request.args.get("limit", 200, type=int)
+    field      = request.args.get("field", "aqi_value")
+    mode       = request.args.get("mode", "heatmap")
+    resolution = request.args.get("resolution", 30, type=int)
+    radius     = request.args.get("radius", 500, type=float)
+
+    resolution = max(5, min(resolution, 80))
+
+    # Fetch latest processed data
+    data = db.get_latest_processed(device_id=device_id, limit=limit)
+    if not data:
+        return jsonify({"ok": True, "geojson": zone_builder._empty_fc()})
+
+    # Temporarily override builder settings
+    zone_builder.grid_resolution = resolution
+    zone_builder.influence_radius_m = radius
+
+    if mode == "contours":
+        geojson = zone_builder.build_contour_zones(data, field=field)
+    elif mode == "points":
+        geojson = zone_builder.build_point_layer(data, field=field)
+    elif mode == "all":
+        geojson = {
+            "heatmap":  zone_builder.build_heatmap(data, field=field),
+            "contours": zone_builder.build_contour_zones(data, field=field),
+            "points":   zone_builder.build_point_layer(data, field=field),
+        }
+        return jsonify({"ok": True, **geojson})
+    else:  # default: heatmap
+        geojson = zone_builder.build_heatmap(data, field=field)
+
+    return jsonify({"ok": True, "geojson": geojson})
 
 
 # =============================================================================

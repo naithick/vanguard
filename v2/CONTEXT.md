@@ -53,6 +53,7 @@ ESP32 node  ──(POST JSON every 3 s)──►  ngrok tunnel
 | POST | `/api/ingest` | ESP32 sends raw sensor JSON |
 | POST | `/api/process` | Manually trigger processing |
 | GET | `/api/readings` | Latest processed data |
+| GET | `/api/zones` | Interpolated air-quality zones (GeoJSON) |
 | GET | `/api/stats` | Summary counts |
 | GET | `/api/health` | Health check |
 
@@ -63,6 +64,7 @@ v2/
 ├── app.py              # Flask server + background worker (15 s cycle)
 ├── config.py           # Supabase creds, calibration defaults, AQI breakpoints
 ├── processor.py        # Raw → processed conversion (AQI, heat index, etc.)
+├── zones.py            # IDW interpolation → continuous air-quality zones (GeoJSON)
 ├── supabase_client.py  # Thin Supabase wrapper (devices, raw, processed)
 ├── load_csv.py         # One-shot CSV loader (safe to re-run, --force to reload)
 ├── start.py            # Launcher: Flask + ngrok in one command
@@ -134,7 +136,8 @@ python load_csv.py --dry-run        # parse only, no DB writes
 | v0.3 | `b8281d1` | CSV loader + full pipeline test (250 rows end-to-end) |
 | v0.4 | `b93685d` | ngrok tunnel + ESP32 firmware + 15 s processing interval |
 | v0.5 | `d3134b6` | Real GPS CSV loader + full pipeline verification (77 rows) |
-| v0.6 | — | Data validation: bounds check, zero-filter, IQR clip (77→65 rows) |
+| v0.6 | `5d365ac` | Data validation: bounds check, zero-filter, IQR clip (77→65 rows) |
+| v0.7 | — | Zone interpolation: IDW heatmap + contour zones (GeoJSON) |
 
 ## Test Results (77-row CSV)
 
@@ -145,6 +148,39 @@ python load_csv.py --dry-run        # parse only, no DB writes
 | Dropped (dust>500 hardware fail) | 1 |
 | IQR-clipped (dust outliers) | ~9 (kept, values capped) |
 | Final processed rows | 65 (84.4% pass rate) |
+
+## Zone Interpolation (`/api/zones`)
+
+Converts discrete sensor points into continuous air-quality zones using
+**Inverse Distance Weighting (IDW)** interpolation.
+
+### Modes
+
+| Mode | Description |
+|---|---|
+| `heatmap` (default) | Grid cells with interpolated AQI + opacity |
+| `contours` | AQI-band polygons (Good/Moderate/Unhealthy/…) |
+| `points` | Raw sensor markers (aggregated by GPS coord) |
+| `all` | All three layers in one response |
+
+### Query Params
+
+| Param | Default | Description |
+|---|---|---|
+| `mode` | `heatmap` | Output format |
+| `field` | `aqi_value` | Metric to interpolate (`pm25_ugm3`, `co_ppm`, etc.) |
+| `resolution` | `30` | Grid size N×N (5–80) |
+| `radius` | `500` | Influence radius in metres |
+| `device_id` | — | Filter by device (optional) |
+| `limit` | `200` | Max readings to use |
+
+### Example
+
+```bash
+curl http://localhost:5001/api/zones?mode=contours
+curl http://localhost:5001/api/zones?mode=heatmap\&resolution=50\&field=pm25_ugm3
+curl http://localhost:5001/api/zones?mode=all
+```
 
 ## Running
 
