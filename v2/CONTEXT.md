@@ -57,6 +57,7 @@ v2/
 ├── config.py           # Supabase creds, calibration defaults, AQI breakpoints
 ├── processor.py        # Raw → processed conversion (AQI, heat index, etc.)
 ├── supabase_client.py  # Thin Supabase wrapper (devices, raw, processed)
+├── load_csv.py         # One-shot CSV loader (safe to re-run, --force to reload)
 ├── requirements.txt    # Frozen pip dependencies
 ├── CONTEXT.md          # This file
 └── venv/               # Python virtual environment (gitignored)
@@ -69,12 +70,26 @@ v2/
 3. **Derived metrics** — AQI (EPA), heat index, toxic gas index, respiratory risk
 4. **Movement** — speed + distance from previous GPS fix
 
+## CSV Test Loader
+
+```bash
+python load_csv.py                 # loads 250 rows (skips if data exists)
+python load_csv.py --force          # wipes test-device data, reloads
+python load_csv.py --limit 100      # load only 100 rows
+python load_csv.py --dry-run        # parse only, no DB writes
+```
+
+- Uses device ID `esp32-csv-test` (auto-registered)
+- **Safe re-run:** skips if rows already exist; `--force` to reload
+- Default limit: 250 rows (out of 1176 in CSV)
+
 ## Version History
 
 | Version | Commit | What changed |
 |---|---|---|
 | v0.1 | `59d5ced` | ESP32 ingestion → Supabase `raw_telemetry` |
 | v0.2 | `f2e2c1e` | Processing pipeline + 25 s background worker |
+| v0.3 | — | CSV loader + full pipeline test (250 rows end-to-end) |
 
 ## Running
 

@@ -37,3 +37,4 @@ pipeline/processed_data/
 # Reference repos (submodules)
 green-path-ui/
 hope-graph-builder/
+venv/
