@@ -1,6 +1,6 @@
 # GreenRoute Mesh v2 — Project Context
 
-> Last updated: 2026-02-17 · **v0.8**
+> Last updated: 2026-02-18 · **v1.1**
 
 ## Overview
 
@@ -15,35 +15,37 @@ Ported from v1's preprocessing module.
 ## Architecture
 
 ```
-ESP32 node  ──(POST JSON every 3 s)──►  ngrok tunnel
-                                             │
-                                             ▼
-                                      Flask /api/ingest (:5001)
-                                             │
-                                             ▼
-                                      raw_telemetry (Supabase)
-                                             │
-                                    background worker (15 s / 5 cycles)
-                                             │
-                                             ▼
-                                     processed_data (Supabase)
+ESP32 node  ──(POST JSON every 3 s)──►  ngrok tunnel ──►  Flask /api/ingest (:5001)
+                                                                   │
+CPCB .xlsx/.csv  ──►  load_cpcb.py (reverse calibration)  ──►      │
+                                                                   ▼
+                                                          raw_telemetry (Supabase)
+                                                                   │
+                                                         background worker (30 s)
+                                                                   │
+                                                                   ▼
+                                                          processed_data (Supabase)
 ```
 
 ## Data Flow
 
 1. **Ingestion** — ESP32 POSTs raw sensor JSON to `/api/ingest` every 3 seconds
    via ngrok tunnel. Device is auto-registered on first contact.
-2. **Storage** — Raw payload written to `raw_telemetry` table immediately.
-3. **Processing** — Background thread wakes every 15 s (= 5 ESP32 cycles),
-   fetches all `processed=false` rows, runs calibration + derived metrics,
-   writes enriched rows to `processed_data`, marks originals as processed.
+2. **CPCB Loader** — `load_cpcb.py` reads government station Excel/CSV files,
+   applies reverse calibration (PM2.5→raw_dust, etc.), and bulk-inserts into
+   `raw_telemetry` (chunks of 500, `returning='minimal'`).
+3. **Storage** — Raw payload written to `raw_telemetry` table immediately.
+4. **Processing** — Background thread wakes every 30 s, fetches all
+   `processed=false` rows (up to 1000), runs validation + calibration + derived
+   metrics, batch-upserts into `processed_data` (chunks of 500), marks
+   originals as processed.
 
 ## Supabase Tables Used
 
 | Table | Purpose |
 |---|---|
-| `devices` | ESP32 node registry (auto-created on first ingest) |
-| `raw_telemetry` | Verbatim sensor readings from ESP32 |
+| `devices` | Node registry — ESP32 + CPCB stations (auto-created) |
+| `raw_telemetry` | Verbatim sensor readings (ESP32 + CPCB loader) |
 | `processed_data` | Calibrated + enriched readings (AQI, heat index, etc.) |
 
 ## API Endpoints
@@ -53,8 +55,11 @@ ESP32 node  ──(POST JSON every 3 s)──►  ngrok tunnel
 | POST | `/api/ingest` | ESP32 sends raw sensor JSON |
 | POST | `/api/process` | Manually trigger processing |
 | GET | `/api/readings` | Latest processed data |
+| GET | `/api/devices` | All devices + latest reading per device |
+| GET | `/api/devices/<id>` | Single device info |
+| GET | `/api/devices/<id>/latest` | Latest reading for a device |
 | GET | `/api/zones` | Interpolated air-quality zones (GeoJSON) |
-| GET | `/api/stats` | Summary counts |
+| GET | `/api/stats` | Summary counts (device_count, total, avg AQI) |
 | GET | `/api/health` | Health check |
 
 ## Files
@@ -65,9 +70,10 @@ v2/
 ├── config.py           # Supabase creds, calibration defaults, AQI breakpoints
 ├── processor.py        # Raw → processed conversion (AQI, heat index, etc.)
 ├── zones.py            # IDW interpolation → continuous air-quality zones (GeoJSON)
-├── supabase_client.py  # Thin Supabase wrapper (devices, raw, processed)
-├── load_csv.py         # One-shot CSV loader (safe to re-run, --force to reload)
-├── map.html            # Dev map viewer (Leaflet + smooth canvas heatmap)
+├── supabase_client.py  # Supabase wrapper (batch upsert, chunks of 500)
+├── load_csv.py         # Legacy CSV loader (esp32-csv-test device)
+├── load_cpcb.py        # CPCB station loader (5 stations, reverse calibration)
+├── map.html            # Map viewer (Leaflet + heatmap, centered on Chennai)
 ├── start.py            # Launcher: Flask + ngrok in one command
 ├── requirements.txt    # Frozen pip dependencies
 ├── CONTEXT.md          # This file
@@ -113,20 +119,46 @@ v2/
 - GPS fallback + movement tracking (speed/distance)
 - Real-time row-by-row processing (v1 was batch-only)
 
-## CSV Test Loader
+## CPCB Station Loader
 
 ```bash
-python load_csv.py                 # loads new CSV (all rows, skips if data exists)
-python load_csv.py --force          # wipes test-device data, reloads
-python load_csv.py --limit 50       # load only 50 rows
-python load_csv.py --csv path.csv   # specify any CSV file
-python load_csv.py --dry-run        # parse only, no DB writes
+python load_cpcb.py                 # load all 5 stations (skips if data exists)
+python load_cpcb.py --force          # wipe all CPCB data, reload from scratch
+python load_cpcb.py --limit 500      # load max 500 rows per station
+python load_cpcb.py --dry-run        # parse only, no DB writes
 ```
 
-- Auto-detects CSV format: old (MQ135/MQ7) or new (timestamp, real GPS)
-- Default CSV: `Sample_Data_with_location .csv` (77 rows, real GPS coords)
-- Uses device ID `esp32-csv-test` (auto-registered)
-- **Safe re-run:** skips if rows already exist; `--force` to reload
+### 5 Chennai CPCB Monitoring Stations
+
+| Station | Device ID | Lat | Lon | Rows |
+|---|---|---|---|---|
+| Velachery | `cpcb-velachery-288` | 12.9815 | 80.2180 | 458 |
+| Manali | `cpcb-manali-5092` | 13.1662 | 80.2585 | 499 |
+| Arumbakkam | `cpcb-arumbakkam-5361` | 13.0694 | 80.2121 | 165 |
+| Perungudi | `cpcb-perungudi-5363` | 12.9611 | 80.2420 | 496 |
+| Alandur | `cpcb-alandur-293` | 13.0067 | 80.2006 | 836 |
+| **Total** | | | | **6,805** |
+
+### Reverse calibration (CPCB → raw sensor values)
+
+- `raw_dust = PM2.5 / 1.5` (inverse of processor's calibration)
+- `raw_mq135 = 900 × (CO₂ / 116.6)^(-1/2.769)`
+- `raw_mq7 = 590 × (CO / 99.042)^(-1/1.518)`
+- Alandur: 8-hour rolling windows → synthetic 15-min readings
+
+### Data source files (in parent dir)
+
+- `site_288*.xlsx` — Velachery
+- `site_5092*.xlsx` — Manali
+- `site_5361*.xlsx` — Arumbakkam
+- `site_5363*.xlsx` — Perungudi
+- `Raw_data_15Min*.csv` — Alandur (different format)
+
+## Legacy CSV Loader
+
+```bash
+python load_csv.py --force           # old 77-row test CSV
+```
 
 ## Version History
 
@@ -139,17 +171,30 @@ python load_csv.py --dry-run        # parse only, no DB writes
 | v0.5 | `d3134b6` | Real GPS CSV loader + full pipeline verification (77 rows) |
 | v0.6 | `5d365ac` | Data validation: bounds check, zero-filter, IQR clip (77→65 rows) |
 | v0.7 | `2ece4f7` | Zone interpolation: IDW heatmap + contour zones (GeoJSON) |
-| v0.8 | — | Map viewer: Leaflet + smooth canvas heatmap, metric picker |
+| v0.8 | `b6a3243` | Map viewer: Leaflet + smooth canvas heatmap, metric picker |
+| v0.9 | `87ab3a4` | CSV loader — 3-way format detection |
+| v1.0 | `50e7464` | Remove v1 files — repo now v2 only |
+| v1.1 | `8f74e5a` | CPCB station loader, batch optimization, map re-centered |
 
-## Test Results (77-row CSV)
+## CPCB Data Results (6,805 rows)
 
 | Metric | Value |
 |---|---|
-| Total raw rows | 77 |
-| Dropped (dust=0 no-read) | 11 |
-| Dropped (dust>500 hardware fail) | 1 |
-| IQR-clipped (dust outliers) | ~9 (kept, values capped) |
-| Final processed rows | 65 (84.4% pass rate) |
+| Total raw rows loaded | 6,805 |
+| Processed (passed validation) | 3,286 (48%) |
+| Dropped (raw_dust=0, out of bounds) | ~3,519 |
+| Active devices | 5 |
+| Avg AQI (recent) | 131.6 (Sensitive) |
+
+### Per-station pass rates
+
+| Station | Raw | Processed | Pass % | Notes |
+|---|---|---|---|---|
+| Velachery | 458 | ~0 | 0% | raw_dust=0 / pressure out of bounds |
+| Manali | 499 | ~454 | 91% | Good quality |
+| Arumbakkam | 165 | ~165 | 100% | Clean data |
+| Perungudi | 496 | ~496 | 100% | Clean data |
+| Alandur | 836 | ~485 | 58% | Many out-of-bounds values |
 
 ## Zone Interpolation (`/api/zones`)
 
