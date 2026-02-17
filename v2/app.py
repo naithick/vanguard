@@ -155,43 +155,75 @@ def health():
 
 def process_pending() -> dict:
     """
-    Fetch all raw_telemetry rows where processed=false, run the processor,
-    write to processed_data, and mark each row as processed.
+    Fetch all raw_telemetry rows where processed=false, run the full
+    data-cleaning pipeline (bounds check, IQR outlier clipping, sensor
+    calibration, AQI, heat index, toxic gas index, respiratory risk,
+    GPS fallback, movement tracking), then batch-write to processed_data.
+
+    Batched DB ops: fetch 1000 → process in-memory → batch insert → batch mark.
     Returns {"processed": N, "dropped": M}.
     """
-    processed = 0
-    dropped = 0
-    rows = db.get_unprocessed_telemetry(limit=200)
+    total_processed = 0
+    total_dropped = 0
 
-    for raw in rows:
-        try:
-            device = raw.get("devices") or db.get_device(raw["device_id"])
-            if not device:
-                log.warning(f"Unknown device {raw['device_id']} — skipping")
-                continue
+    while True:
+        rows = db.get_unprocessed_telemetry(limit=1000)
+        if not rows:
+            break
 
-            enriched = processor.process(raw, device)
+        enriched_batch = []
+        mark_ids = []  # all IDs to mark as processed (passed + dropped)
 
-            if enriched is None:
-                # Row failed validation — mark as processed so we don't retry
-                db.mark_telemetry_processed(raw["id"])
-                dropped += 1
-                continue
+        for raw in rows:
+            try:
+                device = raw.get("devices") or db.get_device(raw["device_id"])
+                if not device:
+                    log.warning(f"Unknown device {raw['device_id']} — skipping")
+                    continue
 
-            db.insert_processed_data(enriched)
-            db.mark_telemetry_processed(raw["id"])
-            processed += 1
-        except Exception as exc:
-            exc_msg = str(exc)
-            # Duplicate key = already processed (real-time beat us to it)
-            if "23505" in exc_msg or "duplicate key" in exc_msg.lower():
-                log.debug(f"Row {raw.get('id')} already processed — marking done")
-                db.mark_telemetry_processed(raw["id"])
-                processed += 1
-            else:
-                log.error(f"Processing row {raw.get('id')} failed: {exc}")
+                result = processor.process(raw, device)
 
-    return {"processed": processed, "dropped": dropped}
+                if result is None:
+                    # Failed validation (bounds/null/outlier) — still mark done
+                    mark_ids.append(raw["id"])
+                    total_dropped += 1
+                    continue
+
+                enriched_batch.append(result)
+                mark_ids.append(raw["id"])
+            except Exception as exc:
+                exc_msg = str(exc)
+                if "23505" in exc_msg or "duplicate key" in exc_msg.lower():
+                    mark_ids.append(raw["id"])
+                    total_processed += 1
+                else:
+                    log.error(f"Processing row {raw.get('id')} failed: {exc}")
+
+        # Batch DB writes
+        if enriched_batch:
+            try:
+                db.batch_insert_processed(enriched_batch)
+                total_processed += len(enriched_batch)
+            except Exception as exc:
+                log.error(f"Batch insert failed: {exc}")
+                # Fall back to per-row insert to salvage what we can
+                for row in enriched_batch:
+                    try:
+                        db.insert_processed_data(row)
+                        total_processed += 1
+                    except Exception:
+                        total_dropped += 1
+
+        if mark_ids:
+            db.batch_mark_processed(mark_ids)
+
+        log.info(f"Batch done: {len(enriched_batch)} processed, "
+                 f"{total_dropped} dropped so far ({len(rows)} fetched)")
+
+        if len(rows) < 1000:
+            break  # no more rows
+
+    return {"processed": total_processed, "dropped": total_dropped}
 
 
 # =============================================================================

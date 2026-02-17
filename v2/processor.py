@@ -106,13 +106,9 @@ class DataProcessor:
         reasons: List[str] = []
 
         # ── 1. Null / missing check ──────────────────────────────────────
-        for field in ("raw_dust", "temperature_c", "humidity_pct", "pressure_hpa"):
-            val = raw.get(field)
-            if val is None:
-                reasons.append(f"{field} is null")
-
-        if reasons:
-            return False, "; ".join(reasons)
+        # Only raw_dust is critical for AQI — weather fields are optional
+        if raw.get("raw_dust") is None:
+            return False, "raw_dust is null"
 
         # ── 2. Hard sensor bounds ────────────────────────────────────────
         for field, (lo, hi) in SENSOR_BOUNDS.items():

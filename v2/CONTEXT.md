@@ -66,7 +66,7 @@ CPCB .xlsx/.csv  ──►  load_cpcb.py (reverse calibration)  ──►      �
 
 ```
 v2/
-├── app.py              # Flask server + background worker (15 s cycle)
+├── app.py              # Flask server + background worker (30 s cycle)
 ├── config.py           # Supabase creds, calibration defaults, AQI breakpoints
 ├── processor.py        # Raw → processed conversion (AQI, heat index, etc.)
 ├── zones.py            # IDW interpolation → continuous air-quality zones (GeoJSON)
@@ -259,4 +259,4 @@ python app.py
 | `SUPABASE_URL` | hardcoded | Supabase project URL |
 | `SUPABASE_SERVICE_KEY` | hardcoded | Service-role key |
 | `PORT` | `5001` | Flask listen port |
-| `PROCESS_INTERVAL` | `15` | Background worker interval (seconds) |
+| `PROCESS_INTERVAL` | `30` | Background worker interval (seconds) |

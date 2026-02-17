@@ -132,6 +132,36 @@ class SupabaseClient:
         log.debug(f"Processed data stored for {data.get('device_id')}")
         return res.data[0] if res.data else None
 
+    def batch_insert_processed(self, rows: list) -> int:
+        """Batch-upsert processed rows (chunks of 500, returning='minimal'). Returns count inserted."""
+        if not rows:
+            return 0
+        total = 0
+        CHUNK = 500
+        for i in range(0, len(rows), CHUNK):
+            chunk = rows[i:i + CHUNK]
+            self.client.table("processed_data").upsert(
+                chunk, on_conflict="raw_telemetry_id",
+                returning="minimal",
+                default_to_null=True,
+            ).execute()
+            total += len(chunk)
+        return total
+
+    def batch_mark_processed(self, ids: list) -> int:
+        """Mark multiple raw_telemetry rows as processed in one call per chunk."""
+        if not ids:
+            return 0
+        total = 0
+        CHUNK = 500
+        for i in range(0, len(ids), CHUNK):
+            chunk = ids[i:i + CHUNK]
+            self.client.table("raw_telemetry").update(
+                {"processed": True}
+            ).in_("id", chunk).execute()
+            total += len(chunk)
+        return total
+
     def get_latest_processed(self, device_id: str = None, limit: int = 100) -> List[Dict]:
         """Most recent processed rows (optionally per device)."""
         q = self.client.table("processed_data").select("*")
