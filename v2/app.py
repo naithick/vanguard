@@ -8,9 +8,23 @@ GET  /api/zones     — interpolated air-quality zone GeoJSON
 GET  /api/stats     — quick summary counts
 GET  /api/health    — health-check
 
+ALERTS:
+GET  /api/alerts            — list alerts (filters: active, severity, type)
+GET  /api/alerts/<id>       — single alert
+POST /api/alerts            — create alert (manual)
+PUT  /api/alerts/<id>/resolve — resolve an alert
+
+REPORTS (anonymous, no login):
+GET  /api/reports           — list reports (filters: status, category)
+GET  /api/reports/<id>      — single report
+POST /api/reports           — create report
+PUT  /api/reports/<id>/status — update status
+POST /api/reports/<id>/upvote — upvote a report
+
 Real-time: each ingest request immediately processes the row inline.
 Background worker (safety net) runs every 30 s to catch any rows that
 slipped through (errors, race conditions, CSV bulk loads).
+Auto-alerts: when AQI exceeds thresholds during processing.
 """
 
 import os
@@ -119,6 +133,11 @@ def ingest():
                     f"PM2.5={enriched.get('pm25_ugm3')}, "
                     f"AQI={enriched.get('aqi_value')}"
                 )
+                # Auto-alert if AQI is high
+                try:
+                    check_and_create_alert(enriched, device)
+                except Exception as alert_exc:
+                    log.warning(f"Auto-alert check failed: {alert_exc}")
         except Exception as proc_exc:
             # Processing failed — background worker will retry
             process_status = "deferred"
@@ -198,6 +217,15 @@ def process_pending() -> dict:
                     total_processed += 1
                 else:
                     log.error(f"Processing row {raw.get('id')} failed: {exc}")
+
+        # Auto-alert check for batch processing
+        for row in enriched_batch:
+            try:
+                device_info = db.get_device(row.get("device_id"))
+                if device_info:
+                    check_and_create_alert(row, device_info)
+            except Exception as alert_exc:
+                log.warning(f"Batch auto-alert check failed: {alert_exc}")
 
         # Batch DB writes
         if enriched_batch:
@@ -332,6 +360,244 @@ def get_device_latest(device_id):
 @app.route("/api/stats", methods=["GET"])
 def stats():
     return jsonify({"ok": True, **db.get_statistics()})
+
+
+# =============================================================================
+#  ALERTS
+# =============================================================================
+
+# AQI thresholds for auto-alerts
+# alert_type must be one of: aqi, pm25, co (DB check constraint)
+# severity must be one of: critical, warning, info, danger
+AQI_THRESHOLDS = [
+    (301, "critical",  "Hazardous air quality"),
+    (201, "danger",    "Very unhealthy air quality"),
+    (151, "warning",   "Unhealthy air quality"),
+    (101, "info",      "Unhealthy for sensitive groups"),
+]
+
+VALID_ALERT_TYPES = {"aqi", "pm25", "co"}
+VALID_ALERT_SEVERITIES = {"critical", "warning", "info", "danger"}
+
+
+def check_and_create_alert(enriched: dict, device: dict):
+    """Auto-create an alert if AQI exceeds thresholds. No duplicates for same device."""
+    aqi = enriched.get("aqi_value")
+    if not aqi:
+        return
+
+    for threshold, severity, msg in AQI_THRESHOLDS:
+        if aqi >= threshold:
+            # Don't create duplicate active AQI alerts for same device
+            existing = db.get_active_alert_for_device(
+                device.get("device_id"), "aqi"
+            )
+            if existing:
+                return  # already have an active alert
+
+            db.create_alert({
+                "device_id":  device.get("device_id"),
+                "alert_type": "aqi",
+                "severity":   severity,
+                "title":      f"AQI {int(aqi)} - {msg}",
+                "message":    f"Device {device.get('name', device.get('device_id'))} "
+                              f"recorded AQI {int(aqi)}. {msg}.",
+                "latitude":   enriched.get("latitude"),
+                "longitude":  enriched.get("longitude"),
+            })
+            log.warning(f"AUTO-ALERT: aqi for {device.get('device_id')} (AQI={int(aqi)})")
+            return  # only create for the highest matching threshold
+
+
+@app.route("/api/alerts", methods=["GET"])
+def get_alerts():
+    """
+    List alerts.
+    Query params: active (bool), severity, alert_type, limit (default 50)
+    """
+    try:
+        active_only = request.args.get("active", "").lower() in ("true", "1", "yes")
+        severity = request.args.get("severity")
+        alert_type = request.args.get("alert_type")
+        limit = request.args.get("limit", 50, type=int)
+
+        alerts = db.get_alerts(
+            active_only=active_only,
+            severity=severity,
+            alert_type=alert_type,
+            limit=limit,
+        )
+        return jsonify({"ok": True, "alerts": alerts, "count": len(alerts)})
+    except Exception as exc:
+        log.error(f"Get alerts error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/alerts/<alert_id>", methods=["GET"])
+def get_alert(alert_id):
+    """Get a single alert by ID."""
+    try:
+        alert = db.get_alert(alert_id)
+        if not alert:
+            return jsonify({"error": "Alert not found"}), 404
+        return jsonify({"ok": True, "alert": alert})
+    except Exception as exc:
+        log.error(f"Get alert error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/alerts", methods=["POST"])
+def create_alert():
+    """
+    Manually create an alert.
+    JSON body: {title, message, severity, alert_type, device_id, latitude, longitude}
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "No JSON payload"}), 400
+    if not data.get("title"):
+        return jsonify({"error": "title is required"}), 400
+
+    # Validate alert_type and severity against DB constraints
+    at = data.get("alert_type", "aqi")
+    if at not in VALID_ALERT_TYPES:
+        return jsonify({"error": f"Invalid alert_type. Valid: {sorted(VALID_ALERT_TYPES)}"}), 400
+    data["alert_type"] = at
+
+    sev = data.get("severity", "info")
+    if sev not in VALID_ALERT_SEVERITIES:
+        return jsonify({"error": f"Invalid severity. Valid: {sorted(VALID_ALERT_SEVERITIES)}"}), 400
+    data["severity"] = sev
+
+    try:
+        alert = db.create_alert(data)
+        return jsonify({"ok": True, "alert": alert}), 201
+    except Exception as exc:
+        log.error(f"Create alert error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/alerts/<alert_id>/resolve", methods=["PUT"])
+def resolve_alert(alert_id):
+    """Mark an alert as resolved."""
+    try:
+        alert = db.resolve_alert(alert_id)
+        if not alert:
+            return jsonify({"error": "Alert not found"}), 404
+        return jsonify({"ok": True, "alert": alert})
+    except Exception as exc:
+        log.error(f"Resolve alert error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+# =============================================================================
+#  USER REPORTS  (anonymous, no login required)
+# =============================================================================
+
+VALID_CATEGORIES = {"smoke", "dust", "smell", "traffic", "industrial", "construction", "burning", "general", "other"}
+VALID_SEVERITIES = {"low", "medium", "high", "critical"}
+VALID_STATUSES   = {"open", "investigating", "resolved"}
+
+
+@app.route("/api/reports", methods=["GET"])
+def get_reports():
+    """
+    List user reports.
+    Query params: status, category, limit (default 50)
+    """
+    try:
+        status = request.args.get("status")
+        category = request.args.get("category")
+        limit = request.args.get("limit", 50, type=int)
+
+        reports = db.get_reports(status=status, category=category, limit=limit)
+        return jsonify({"ok": True, "reports": reports, "count": len(reports)})
+    except Exception as exc:
+        log.error(f"Get reports error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/reports/<report_id>", methods=["GET"])
+def get_report(report_id):
+    """Get a single report by ID."""
+    try:
+        report = db.get_report(report_id)
+        if not report:
+            return jsonify({"error": "Report not found"}), 404
+        return jsonify({"ok": True, "report": report})
+    except Exception as exc:
+        log.error(f"Get report error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/reports", methods=["POST"])
+def create_report():
+    """
+    Create an anonymous user report.
+    JSON body: {title (required), description, category, severity, latitude, longitude, reporter_name}
+    Categories: smoke, dust, smell, traffic, industrial, construction, burning, general, other
+    Severities: low, medium, high, critical
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "No JSON payload"}), 400
+    if not data.get("title"):
+        return jsonify({"error": "title is required"}), 400
+
+    # Validate category & severity
+    cat = data.get("category", "general").lower()
+    if cat not in VALID_CATEGORIES:
+        return jsonify({"error": f"Invalid category. Valid: {sorted(VALID_CATEGORIES)}"}), 400
+    data["category"] = cat
+
+    sev = data.get("severity", "medium").lower()
+    if sev not in VALID_SEVERITIES:
+        return jsonify({"error": f"Invalid severity. Valid: {sorted(VALID_SEVERITIES)}"}), 400
+    data["severity"] = sev
+
+    try:
+        report = db.create_report(data)
+        return jsonify({"ok": True, "report": report}), 201
+    except Exception as exc:
+        log.error(f"Create report error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/reports/<report_id>/status", methods=["PUT"])
+def update_report_status(report_id):
+    """
+    Update report status.
+    JSON body: {status: "open" | "investigating" | "resolved"}
+    """
+    data = request.get_json(silent=True)
+    if not data or not data.get("status"):
+        return jsonify({"error": "status is required"}), 400
+
+    status = data["status"].lower()
+    if status not in VALID_STATUSES:
+        return jsonify({"error": f"Invalid status. Valid: {sorted(VALID_STATUSES)}"}), 400
+
+    try:
+        report = db.update_report_status(report_id, status)
+        if not report:
+            return jsonify({"error": "Report not found"}), 404
+        return jsonify({"ok": True, "report": report})
+    except Exception as exc:
+        log.error(f"Update report status error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/reports/<report_id>/upvote", methods=["POST"])
+def upvote_report(report_id):
+    """Upvote a report (anonymous, no login)."""
+    try:
+        report = db.upvote_report(report_id)
+        if not report:
+            return jsonify({"error": "Report not found"}), 404
+        return jsonify({"ok": True, "report": report})
+    except Exception as exc:
+        log.error(f"Upvote report error: {exc}")
+        return jsonify({"error": str(exc)}), 500
 
 
 # =============================================================================

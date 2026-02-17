@@ -195,6 +195,141 @@ class SupabaseClient:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
+    # ─────────────────────────────────────────────────────────────────────
+    # ALERTS
+    # ─────────────────────────────────────────────────────────────────────
+
+    def create_alert(self, data: Dict) -> Optional[Dict]:
+        """Create a new alert (manual or auto-generated)."""
+        row = {
+            "device_id":  data.get("device_id"),
+            "alert_type": data.get("alert_type", "aqi"),
+            "severity":   data.get("severity", "warning"),
+            "title":      data.get("title", "Air Quality Alert"),
+            "message":    data.get("message", ""),
+            "latitude":   data.get("latitude"),
+            "longitude":  data.get("longitude"),
+        }
+        res = self.client.table("alerts").insert(row).execute()
+        log.info(f"Alert created: {row['alert_type']} / {row['severity']}")
+        return res.data[0] if res.data else None
+
+    def get_alerts(
+        self,
+        active_only: bool = False,
+        severity: str = None,
+        alert_type: str = None,
+        limit: int = 50,
+    ) -> List[Dict]:
+        """Fetch alerts with optional filters."""
+        q = self.client.table("alerts").select("*")
+        if active_only:
+            q = q.is_("resolved_at", "null")
+        if severity:
+            q = q.eq("severity", severity)
+        if alert_type:
+            q = q.eq("alert_type", alert_type)
+        return q.order("created_at", desc=True).limit(limit).execute().data
+
+    def get_alert(self, alert_id: str) -> Optional[Dict]:
+        """Fetch a single alert by id."""
+        res = self.client.table("alerts").select("*").eq("id", alert_id).execute()
+        return res.data[0] if res.data else None
+
+    def resolve_alert(self, alert_id: str) -> Optional[Dict]:
+        """Mark an alert as resolved."""
+        res = (
+            self.client.table("alerts")
+            .update({"resolved_at": datetime.now(timezone.utc).isoformat()})
+            .eq("id", alert_id)
+            .execute()
+        )
+        log.info(f"Alert resolved: {alert_id}")
+        return res.data[0] if res.data else None
+
+    def get_active_alert_for_device(self, device_id: str, alert_type: str) -> Optional[Dict]:
+        """Check if there's already an active (unresolved) alert of this type for this device."""
+        res = (
+            self.client.table("alerts")
+            .select("*")
+            .eq("device_id", device_id)
+            .eq("alert_type", alert_type)
+            .is_("resolved_at", "null")
+            .limit(1)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+
+    # ─────────────────────────────────────────────────────────────────────
+    # USER REPORTS  (anonymous, no login)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def create_report(self, data: Dict) -> Optional[Dict]:
+        """Create a new anonymous user report."""
+        row = {
+            "title":         data.get("title"),
+            "description":   data.get("description", ""),
+            "category":      data.get("category", "general"),
+            "severity":      data.get("severity", "medium"),
+            "latitude":      data.get("latitude"),
+            "longitude":     data.get("longitude"),
+            "reporter_name": data.get("reporter_name", "Anonymous"),
+            "device_id":     data.get("device_id"),
+            "station_name":  data.get("station_name"),
+            "status":        "open",
+            "upvotes":       0,
+        }
+        res = self.client.table("reports").insert(row).execute()
+        log.info(f"Report created: {row['category']} — {row['title']}")
+        return res.data[0] if res.data else None
+
+    def get_reports(
+        self,
+        status: str = None,
+        category: str = None,
+        limit: int = 50,
+    ) -> List[Dict]:
+        """Fetch reports with optional filters."""
+        q = self.client.table("reports").select("*")
+        if status:
+            q = q.eq("status", status)
+        if category:
+            q = q.eq("category", category)
+        return q.order("created_at", desc=True).limit(limit).execute().data
+
+    def get_report(self, report_id: str) -> Optional[Dict]:
+        """Fetch a single report by id."""
+        res = self.client.table("reports").select("*").eq("id", report_id).execute()
+        return res.data[0] if res.data else None
+
+    def update_report_status(self, report_id: str, status: str) -> Optional[Dict]:
+        """Update report status (open / investigating / resolved)."""
+        update = {"status": status}
+        if status == "resolved":
+            update["resolved_at"] = datetime.now(timezone.utc).isoformat()
+        res = (
+            self.client.table("reports")
+            .update(update)
+            .eq("id", report_id)
+            .execute()
+        )
+        log.info(f"Report {report_id} → {status}")
+        return res.data[0] if res.data else None
+
+    def upvote_report(self, report_id: str) -> Optional[Dict]:
+        """Increment upvote count on a report."""
+        report = self.get_report(report_id)
+        if not report:
+            return None
+        new_count = (report.get("upvotes") or 0) + 1
+        res = (
+            self.client.table("reports")
+            .update({"upvotes": new_count})
+            .eq("id", report_id)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+
 
 # ── Singleton ─────────────────────────────────────────────────────────────────
 db = SupabaseClient()
