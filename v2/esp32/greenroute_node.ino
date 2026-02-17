@@ -22,7 +22,7 @@ const char* password = "12345678";
 
 // ================= SERVER =================
 // *** UPDATE THIS with your ngrok URL (run: python start.py) ***
-const char* serverURL = "https://YOUR-NGROK-URL.ngrok-free.dev/api/ingest";
+const char* serverURL = "https://fishless-unrelaxed-vania.ngrok-free.dev/api/ingest";
 
 // Device identity — backend tracks this node by this ID
 const char* deviceId = "esp32-vanguard-001";
