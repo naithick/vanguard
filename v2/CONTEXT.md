@@ -1,6 +1,6 @@
 # GreenRoute Mesh v2 — Project Context
 
-> Last updated: 2026-02-17 · **v0.4**
+> Last updated: 2026-02-17 · **v0.5**
 
 ## Overview
 
@@ -79,15 +79,17 @@ v2/
 ## CSV Test Loader
 
 ```bash
-python load_csv.py                 # loads 250 rows (skips if data exists)
+python load_csv.py                 # loads new CSV (all rows, skips if data exists)
 python load_csv.py --force          # wipes test-device data, reloads
-python load_csv.py --limit 100      # load only 100 rows
+python load_csv.py --limit 50       # load only 50 rows
+python load_csv.py --csv path.csv   # specify any CSV file
 python load_csv.py --dry-run        # parse only, no DB writes
 ```
 
+- Auto-detects CSV format: old (MQ135/MQ7) or new (timestamp, real GPS)
+- Default CSV: `Sample_Data_with_location .csv` (77 rows, real GPS coords)
 - Uses device ID `esp32-csv-test` (auto-registered)
 - **Safe re-run:** skips if rows already exist; `--force` to reload
-- Default limit: 250 rows (out of 1176 in CSV)
 
 ## Version History
 
@@ -96,7 +98,8 @@ python load_csv.py --dry-run        # parse only, no DB writes
 | v0.1 | `59d5ced` | ESP32 ingestion → Supabase `raw_telemetry` |
 | v0.2 | `f2e2c1e` | Processing pipeline + 25 s background worker |
 | v0.3 | `b8281d1` | CSV loader + full pipeline test (250 rows end-to-end) |
-| v0.4 | — | ngrok tunnel + ESP32 firmware + 15 s processing interval |
+| v0.4 | `b93685d` | ngrok tunnel + ESP32 firmware + 15 s processing interval |
+| v0.5 | — | Real GPS CSV loader + full pipeline verification (77 rows) |
 
 ## Running
 
