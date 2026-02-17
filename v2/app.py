@@ -1,16 +1,16 @@
 """
 GreenRoute Mesh v2 — API Server
 
-POST /api/ingest    — ESP32 sends raw sensor JSON → stored in raw_telemetry
-POST /api/process   — manually trigger processing of pending rows
+POST /api/ingest    — ESP32 sends raw sensor JSON → stored + processed in real-time
+POST /api/process   — manually trigger processing of any missed rows
 GET  /api/readings  — latest processed readings
 GET  /api/zones     — interpolated air-quality zone GeoJSON
 GET  /api/stats     — quick summary counts
 GET  /api/health    — health-check
 
-Background worker runs every PROCESS_INTERVAL seconds (default 15 s = 5
-ESP32 cycles at 3 s each), picks up all unprocessed raw_telemetry rows,
-runs the processor, and writes enriched rows into processed_data.
+Real-time: each ingest request immediately processes the row inline.
+Background worker (safety net) runs every 30 s to catch any rows that
+slipped through (errors, race conditions, CSV bulk loads).
 """
 
 import os
@@ -94,11 +94,41 @@ def ingest():
         if not row:
             return jsonify({"error": "Insert failed"}), 500
 
-        log.info(f"Ingested raw telemetry from {device_id}  (id={row.get('id')})")
+        telemetry_id = row.get("id")
+        log.info(f"Ingested raw telemetry from {device_id}  (id={telemetry_id})")
+
+        # ── REAL-TIME PROCESSING ──────────────────────────────────────
+        # Process immediately — no waiting for background worker.
+        processed_row = None
+        process_status = "skipped"
+        try:
+            # Attach device info so processor doesn't need a second query
+            row["devices"] = device
+            enriched = processor.process(row, device)
+
+            if enriched is None:
+                db.mark_telemetry_processed(telemetry_id)
+                process_status = "dropped"  # failed validation
+                log.info(f"Row {telemetry_id} dropped by validator")
+            else:
+                processed_row = db.insert_processed_data(enriched)
+                db.mark_telemetry_processed(telemetry_id)
+                process_status = "processed"
+                log.info(
+                    f"Real-time processed {device_id}: "
+                    f"PM2.5={enriched.get('pm25_ugm3')}, "
+                    f"AQI={enriched.get('aqi_value')}"
+                )
+        except Exception as proc_exc:
+            # Processing failed — background worker will retry
+            process_status = "deferred"
+            log.warning(f"Real-time processing failed, deferred: {proc_exc}")
 
         return jsonify({
             "ok": True,
-            "telemetry_id": row.get("id"),
+            "telemetry_id": telemetry_id,
+            "process_status": process_status,
+            "processed": processed_row,
             "ts": datetime.now(timezone.utc).isoformat(),
         }), 201
 
@@ -152,7 +182,14 @@ def process_pending() -> dict:
             db.mark_telemetry_processed(raw["id"])
             processed += 1
         except Exception as exc:
-            log.error(f"Processing row {raw.get('id')} failed: {exc}")
+            exc_msg = str(exc)
+            # Duplicate key = already processed (real-time beat us to it)
+            if "23505" in exc_msg or "duplicate key" in exc_msg.lower():
+                log.debug(f"Row {raw.get('id')} already processed — marking done")
+                db.mark_telemetry_processed(raw["id"])
+                processed += 1
+            else:
+                log.error(f"Processing row {raw.get('id')} failed: {exc}")
 
     return {"processed": processed, "dropped": dropped}
 
@@ -179,6 +216,82 @@ def get_readings():
     limit = request.args.get("limit", 100, type=int)
     data = db.get_latest_processed(device_id=device_id, limit=limit)
     return jsonify({"ok": True, "data": data, "count": len(data)})
+
+
+# =============================================================================
+#  DASHBOARD ENDPOINTS
+# =============================================================================
+
+@app.route("/api/devices", methods=["GET"])
+def get_devices():
+    """
+    Get all registered devices with their latest reading.
+    Returns: [{device_info, latest_reading}, ...]
+    """
+    try:
+        devices = db.get_all_devices()
+        enriched = []
+        
+        for device in devices:
+            device_id = device.get("device_id")
+            # Fetch latest reading for this device
+            latest = db.get_latest_processed(device_id=device_id, limit=1)
+            enriched.append({
+                "device": device,
+                "latest_reading": latest[0] if latest else None,
+            })
+        
+        return jsonify({"ok": True, "devices": enriched, "count": len(enriched)})
+    except Exception as exc:
+        log.error(f"Get devices error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/devices/<device_id>", methods=["GET"])
+def get_device_info(device_id):
+    """
+    Get detailed info for a specific device.
+    """
+    try:
+        device = db.get_device(device_id)
+        if not device:
+            return jsonify({"error": "Device not found"}), 404
+        
+        # Get some recent readings
+        limit = request.args.get("limit", 20, type=int)
+        readings = db.get_latest_processed(device_id=device_id, limit=limit)
+        
+        return jsonify({
+            "ok": True,
+            "device": device,
+            "recent_readings": readings,
+            "readings_count": len(readings),
+        })
+    except Exception as exc:
+        log.error(f"Get device info error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/devices/<device_id>/latest", methods=["GET"])
+def get_device_latest(device_id):
+    """
+    Get the most recent reading for a specific device.
+    """
+    try:
+        device = db.get_device(device_id)
+        if not device:
+            return jsonify({"error": "Device not found"}), 404
+        
+        latest = db.get_latest_processed(device_id=device_id, limit=1)
+        
+        return jsonify({
+            "ok": True,
+            "device_id": device_id,
+            "latest_reading": latest[0] if latest else None,
+        })
+    except Exception as exc:
+        log.error(f"Get device latest error: {exc}")
+        return jsonify({"error": str(exc)}), 500
 
 
 # =============================================================================
@@ -245,7 +358,7 @@ def zones():
 #  BACKGROUND WORKER  (every PROCESS_INTERVAL seconds)
 # =============================================================================
 
-PROCESS_INTERVAL = int(os.environ.get("PROCESS_INTERVAL", 15))
+PROCESS_INTERVAL = int(os.environ.get("PROCESS_INTERVAL", 30))
 
 
 def _background_loop():
