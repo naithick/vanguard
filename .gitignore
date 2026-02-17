@@ -1,0 +1,39 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+.env.local
+
+# Node / React
+node_modules/
+green-path-ui/node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs
+pipeline/processed_data/
+*.log
+
+# Large files
+*.pdf
+
+# Reference repos (submodules)
+green-path-ui/
+hope-graph-builder/
