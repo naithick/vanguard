@@ -38,8 +38,16 @@ logging.basicConfig(
 log = logging.getLogger("greenroute.api")
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
-app = Flask(__name__)
+app = Flask(__name__, static_folder=".", static_url_path="/static")
 CORS(app)
+
+
+# =============================================================================
+#  GET /  — dev map viewer
+# =============================================================================
+@app.route("/")
+def index():
+    return app.send_static_file("map.html")
 
 
 # =============================================================================

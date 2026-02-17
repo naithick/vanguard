@@ -1,6 +1,6 @@
 # GreenRoute Mesh v2 — Project Context
 
-> Last updated: 2026-02-17 · **v0.6**
+> Last updated: 2026-02-17 · **v0.8**
 
 ## Overview
 
@@ -67,6 +67,7 @@ v2/
 ├── zones.py            # IDW interpolation → continuous air-quality zones (GeoJSON)
 ├── supabase_client.py  # Thin Supabase wrapper (devices, raw, processed)
 ├── load_csv.py         # One-shot CSV loader (safe to re-run, --force to reload)
+├── map.html            # Dev map viewer (Leaflet + smooth canvas heatmap)
 ├── start.py            # Launcher: Flask + ngrok in one command
 ├── requirements.txt    # Frozen pip dependencies
 ├── CONTEXT.md          # This file
@@ -137,7 +138,8 @@ python load_csv.py --dry-run        # parse only, no DB writes
 | v0.4 | `b93685d` | ngrok tunnel + ESP32 firmware + 15 s processing interval |
 | v0.5 | `d3134b6` | Real GPS CSV loader + full pipeline verification (77 rows) |
 | v0.6 | `5d365ac` | Data validation: bounds check, zero-filter, IQR clip (77→65 rows) |
-| v0.7 | — | Zone interpolation: IDW heatmap + contour zones (GeoJSON) |
+| v0.7 | `2ece4f7` | Zone interpolation: IDW heatmap + contour zones (GeoJSON) |
+| v0.8 | — | Map viewer: Leaflet + smooth canvas heatmap, metric picker |
 
 ## Test Results (77-row CSV)
 
