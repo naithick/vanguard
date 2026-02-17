@@ -2,26 +2,28 @@
 GreenRoute Mesh v2 — Configuration
 Single source of truth for Supabase credentials, calibration defaults,
 and processing constants.
+
+Reads secrets from environment variables (or .env file via python-dotenv).
+NEVER hardcode API keys here.
 """
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+# Load .env file if present (keeps secrets out of code)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass  # python-dotenv not installed — rely on env vars
 
 
 @dataclass
 class SupabaseConfig:
     """Supabase connection settings (service-role key bypasses RLS)."""
-    url: str = os.environ.get(
-        "SUPABASE_URL",
-        "https://vwvnrqtakrgnnjbvkkhr.supabase.co",
-    )
-    service_key: str = os.environ.get(
-        "SUPABASE_SERVICE_KEY",
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-        "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3dm5ycXRha3Jnbm5qYnZra2hyIiwi"
-        "cm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTMyMDU3NCwiZXhwIjoyMDg2"
-        "ODk2NTc0fQ.eaDkJG1BTZm_Dz0729iWEdPg6i5gq56CO6uFKYp3llE",
-    )
+    url: str = os.environ.get("SUPABASE_URL", "")
+    service_key: str = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 
 @dataclass

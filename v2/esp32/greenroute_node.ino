@@ -17,12 +17,13 @@
 #include <Adafruit_SH110X.h>
 
 // ================= WIFI =================
-const char* ssid = "ESP32";
-const char* password = "12345678";
+// *** UPDATE THESE with your WiFi credentials ***
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
 
 // ================= SERVER =================
 // *** UPDATE THIS with your ngrok URL (run: python start.py) ***
-const char* serverURL = "https://fishless-unrelaxed-vania.ngrok-free.dev/api/ingest";
+const char* serverURL = "https://YOUR-NGROK-URL.ngrok-free.dev/api/ingest";
 
 // Device identity — backend tracks this node by this ID
 const char* deviceId = "esp32-vanguard-001";
