@@ -61,6 +61,11 @@ class SupabaseClient:
             return device
         return self.register_device(device_id, name or f"ESP32-{device_id[:8]}")
 
+    def get_all_devices(self) -> List[Dict]:
+        """Fetch all registered devices."""
+        res = self.client.table("devices").select("*").execute()
+        return res.data
+
     # ─────────────────────────────────────────────────────────────────────
     # RAW TELEMETRY  (ESP32 → Supabase)
     # ─────────────────────────────────────────────────────────────────────

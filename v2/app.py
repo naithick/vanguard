@@ -219,6 +219,82 @@ def get_readings():
 
 
 # =============================================================================
+#  DASHBOARD ENDPOINTS
+# =============================================================================
+
+@app.route("/api/devices", methods=["GET"])
+def get_devices():
+    """
+    Get all registered devices with their latest reading.
+    Returns: [{device_info, latest_reading}, ...]
+    """
+    try:
+        devices = db.get_all_devices()
+        enriched = []
+        
+        for device in devices:
+            device_id = device.get("device_id")
+            # Fetch latest reading for this device
+            latest = db.get_latest_processed(device_id=device_id, limit=1)
+            enriched.append({
+                "device": device,
+                "latest_reading": latest[0] if latest else None,
+            })
+        
+        return jsonify({"ok": True, "devices": enriched, "count": len(enriched)})
+    except Exception as exc:
+        log.error(f"Get devices error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/devices/<device_id>", methods=["GET"])
+def get_device_info(device_id):
+    """
+    Get detailed info for a specific device.
+    """
+    try:
+        device = db.get_device(device_id)
+        if not device:
+            return jsonify({"error": "Device not found"}), 404
+        
+        # Get some recent readings
+        limit = request.args.get("limit", 20, type=int)
+        readings = db.get_latest_processed(device_id=device_id, limit=limit)
+        
+        return jsonify({
+            "ok": True,
+            "device": device,
+            "recent_readings": readings,
+            "readings_count": len(readings),
+        })
+    except Exception as exc:
+        log.error(f"Get device info error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/devices/<device_id>/latest", methods=["GET"])
+def get_device_latest(device_id):
+    """
+    Get the most recent reading for a specific device.
+    """
+    try:
+        device = db.get_device(device_id)
+        if not device:
+            return jsonify({"error": "Device not found"}), 404
+        
+        latest = db.get_latest_processed(device_id=device_id, limit=1)
+        
+        return jsonify({
+            "ok": True,
+            "device_id": device_id,
+            "latest_reading": latest[0] if latest else None,
+        })
+    except Exception as exc:
+        log.error(f"Get device latest error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+# =============================================================================
 #  GET /api/stats
 # =============================================================================
 @app.route("/api/stats", methods=["GET"])
