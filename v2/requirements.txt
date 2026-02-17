@@ -1,0 +1,4 @@
+flask>=3.0
+flask-cors
+supabase>=2.0
+python-dotenv
