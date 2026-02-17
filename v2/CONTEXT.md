@@ -1,12 +1,16 @@
 # GreenRoute Mesh v2 — Project Context
 
-> Last updated: 2026-02-17 · **v0.5**
+> Last updated: 2026-02-17 · **v0.6**
 
 ## Overview
 
 Clean rewrite of the GreenRoute Mesh backend. ESP32 nodes send raw air-quality
 telemetry to a Flask API (exposed via ngrok), which stores it in Supabase.
 A background worker processes the data every 15 seconds (5 ESP32 cycles).
+
+**Current status:** Processing pipeline has calibration + derived metrics +
+data validation (bounds checking, zero-value filtering, IQR outlier clipping).
+Ported from v1's preprocessing module.
 
 ## Architecture
 
@@ -71,10 +75,40 @@ v2/
 
 ## Processing Pipeline (per row)
 
+0. **Data validation** — bounds check, zero-value filter, IQR outlier clipping
 1. **Calibrate sensors** — dust→PM2.5, MQ135→CO₂, MQ7→CO
 2. **GPS fallback** — if (0,0) use device's static location
 3. **Derived metrics** — AQI (EPA), heat index, toxic gas index, respiratory risk
 4. **Movement** — speed + distance from previous GPS fix
+
+### Validation details
+
+| Check | Action | Example |
+|---|---|---|
+| Null critical fields | DROP row | `raw_dust` is null |
+| Sensor out of bounds | DROP row | `dust=0` (no-read), `dust=674` (>500) |
+| IQR outlier (dust) | CLIP to fence | `dust=221` → clipped to ~61 |
+| Temperature/humidity/pressure | Track only | Natural variation, not noise |
+
+### v1 preprocessing features — ported to v2
+
+| Feature | v1 module | v2 Status |
+|---|---|---|
+| Outlier removal (IQR, 1.5×) | `OutlierRemoval` | ✅ Ported (clip action on dust) |
+| Sensor bounds checking | implicit in v1 | ✅ Ported (hard bounds + zero-filter) |
+| Null/missing detection | implicit in v1 | ✅ Ported |
+| Imputation (median / KNN) | `Imputation` | ❌ Not needed (row-by-row, drop instead) |
+| Normalization (z-score / minmax) | `DataTransformation` | ❌ Not needed (raw values stored) |
+| PCA (95% variance) | `DataTransformation` | ❌ Not needed (no dimensionality issue) |
+
+### What v2 has that v1 did NOT
+
+- EPA AQI calculation (PM2.5 + CO sub-indices)
+- Heat index (Rothfusz regression)
+- Toxic gas index (composite CO + CO₂ score)
+- Respiratory risk label
+- GPS fallback + movement tracking (speed/distance)
+- Real-time row-by-row processing (v1 was batch-only)
 
 ## CSV Test Loader
 
@@ -99,7 +133,18 @@ python load_csv.py --dry-run        # parse only, no DB writes
 | v0.2 | `f2e2c1e` | Processing pipeline + 25 s background worker |
 | v0.3 | `b8281d1` | CSV loader + full pipeline test (250 rows end-to-end) |
 | v0.4 | `b93685d` | ngrok tunnel + ESP32 firmware + 15 s processing interval |
-| v0.5 | — | Real GPS CSV loader + full pipeline verification (77 rows) |
+| v0.5 | `d3134b6` | Real GPS CSV loader + full pipeline verification (77 rows) |
+| v0.6 | — | Data validation: bounds check, zero-filter, IQR clip (77→65 rows) |
+
+## Test Results (77-row CSV)
+
+| Metric | Value |
+|---|---|
+| Total raw rows | 77 |
+| Dropped (dust=0 no-read) | 11 |
+| Dropped (dust>500 hardware fail) | 1 |
+| IQR-clipped (dust outliers) | ~9 (kept, values capped) |
+| Final processed rows | 65 (84.4% pass rate) |
 
 ## Running
 

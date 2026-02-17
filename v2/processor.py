@@ -3,27 +3,147 @@ GreenRoute Mesh v2 — Data Processor
 Converts one raw_telemetry row into one processed_data row.
 
 Pipeline per row:
+  0. Data validation      (bounds check, zero-value, outlier detection)
   1. Sensor calibration   (dust→PM2.5, MQ135→CO₂, MQ7→CO)
   2. GPS fallback         (0,0 → device static location)
   3. Derived metrics      (AQI, Heat Index, Toxic Gas Index, Respiratory Risk)
   4. Movement             (speed + distance from previous GPS fix)
+
+Rows that fail validation are skipped (process() returns None).
 """
 
 import math
 import logging
+from collections import deque
 from datetime import datetime
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from config import processing_config, device_defaults
 
 log = logging.getLogger("greenroute.processor")
 
 
+# ── Sensor bounds (physically plausible ranges) ──────────────────────────────
+# Values outside these indicate hardware error or noise.
+SENSOR_BOUNDS = {
+    "raw_dust":        (1,    500),    # 0 = no-read, >500 = malfunction
+    "raw_mq135":       (0,    4095),   # ESP32 12-bit ADC (0 OK — sensor optional)
+    "raw_mq7":         (0,    4095),   # ESP32 12-bit ADC (0 OK — sensor optional)
+    "temperature_c":   (-10,  60),     # BME680 operational (realistic outdoor)
+    "humidity_pct":    (5,    100),    # <5% is sensor dry-out
+    "pressure_hpa":    (800,  1100),   # realistic surface pressure
+    "gas_resistance":  (1,    1_000_000),  # BME680 gas sensor Ω
+}
+
+# IQR-style outlier thresholds (rolling window per device+field)
+IQR_MULTIPLIER = 1.5
+ROLLING_WINDOW = 50  # keep last N values for IQR calculation
+
+
 class DataProcessor:
-    """Stateless-ish processor (only caches last GPS fix per device)."""
+    """Stateless-ish processor (caches GPS + rolling stats per device)."""
 
     # previous GPS fix per device — needed for speed / distance
     _prev: Dict[str, Dict] = {}
+
+    # rolling sensor history per (device_id, field) for IQR outlier detection
+    _history: Dict[str, deque] = {}
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 0. DATA VALIDATION
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _get_history(self, device_id: str, field: str) -> deque:
+        """Return the rolling deque for a (device, field) pair."""
+        key = f"{device_id}:{field}"
+        if key not in self._history:
+            self._history[key] = deque(maxlen=ROLLING_WINDOW)
+        return self._history[key]
+
+    def _iqr_outlier(self, device_id: str, field: str, value: float) -> Tuple[bool, Optional[float]]:
+        """
+        Returns (is_outlier, clipped_value).
+        If outlier, clipped_value is the nearest IQR fence (like v1's clip action).
+        The value is always appended to history so the window stays representative.
+        """
+        hist = self._get_history(device_id, field)
+        is_outlier = False
+        clipped = value
+
+        if len(hist) >= 10:  # need at least 10 points for meaningful IQR
+            sorted_h = sorted(hist)
+            n = len(sorted_h)
+            q1 = sorted_h[n // 4]
+            q3 = sorted_h[3 * n // 4]
+            iqr = q3 - q1
+            lower = q1 - IQR_MULTIPLIER * iqr
+            upper = q3 + IQR_MULTIPLIER * iqr
+            if value < lower:
+                is_outlier = True
+                clipped = lower
+            elif value > upper:
+                is_outlier = True
+                clipped = upper
+
+        hist.append(value)
+        return is_outlier, clipped
+
+    def validate(self, raw: Dict) -> Tuple[bool, str]:
+        """
+        Check a raw telemetry row for data quality.
+
+        Behaviour mirrors v1:
+        - Null / missing critical fields → DROP
+        - Hard sensor bounds violation   → DROP  (no-read, hardware fail)
+        - IQR outliers                   → CLIP  (value capped to IQR fence)
+
+        Returns
+        -------
+        (True, "")           – row is valid (possibly with clipped values)
+        (False, reason_str)  – row should be skipped
+        """
+        device_id = raw.get("device_id", "unknown")
+        reasons: List[str] = []
+
+        # ── 1. Null / missing check ──────────────────────────────────────
+        for field in ("raw_dust", "temperature_c", "humidity_pct", "pressure_hpa"):
+            val = raw.get(field)
+            if val is None:
+                reasons.append(f"{field} is null")
+
+        if reasons:
+            return False, "; ".join(reasons)
+
+        # ── 2. Hard sensor bounds ────────────────────────────────────────
+        for field, (lo, hi) in SENSOR_BOUNDS.items():
+            val = raw.get(field)
+            if val is None:
+                continue  # optional fields (mq135, mq7, gas) may be absent
+            if val < lo or val > hi:
+                reasons.append(f"{field}={val} out of bounds [{lo}, {hi}]")
+
+        if reasons:
+            return False, "; ".join(reasons)
+
+        # ── 3. IQR outlier clipping on noisy sensors (v1-style) ──────────
+        #    Temperature, humidity, pressure vary naturally — not noise.
+        #    Dust sensor is the noisy one that benefits from IQR filtering.
+        clip_fields = ["raw_dust"]
+        for field in clip_fields:
+            val = raw.get(field)
+            if val is not None:
+                is_outlier, clipped = self._iqr_outlier(device_id, field, val)
+                if is_outlier:
+                    log.debug(f"IQR clip {field}: {val} → {clipped}")
+                    raw[field] = clipped  # mutate in-place — clipped value downstream
+
+        # Track non-clip fields for future reference (no action)
+        for field in ("temperature_c", "humidity_pct", "pressure_hpa", "gas_resistance"):
+            val = raw.get(field)
+            if val is not None:
+                self._iqr_outlier(device_id, field, val)  # track only
+
+        return True, ""
 
     # ─────────────────────────────────────────────────────────────────────
     # 1. SENSOR CALIBRATION
@@ -153,15 +273,21 @@ class DataProcessor:
     # MAIN ENTRY POINT
     # ─────────────────────────────────────────────────────────────────────
 
-    def process(self, raw: Dict, device: Dict) -> Dict:
+    def process(self, raw: Dict, device: Dict) -> Optional[Dict]:
         """
         Transform one raw_telemetry row → one processed_data row.
+        Returns None if the row fails validation.
 
         Parameters
         ----------
         raw     : row from raw_telemetry (dict)
         device  : matching devices row   (dict)
         """
+        # Step 0: validate
+        valid, reason = self.validate(raw)
+        if not valid:
+            log.info(f"Row {raw.get('id')} dropped: {reason}")
+            return None
         # calibration factors
         d_cal  = device.get("dust_calibration", 1.0) or 1.0
         m135   = device.get("mq135_calibration", 1.0) or 1.0

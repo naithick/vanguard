@@ -113,13 +113,14 @@ def health():
 #  PROCESSING WORKER  (called by background thread + manual endpoint)
 # =============================================================================
 
-def process_pending() -> int:
+def process_pending() -> dict:
     """
     Fetch all raw_telemetry rows where processed=false, run the processor,
     write to processed_data, and mark each row as processed.
-    Returns the number of rows processed.
+    Returns {"processed": N, "dropped": M}.
     """
-    count = 0
+    processed = 0
+    dropped = 0
     rows = db.get_unprocessed_telemetry(limit=200)
 
     for raw in rows:
@@ -130,13 +131,20 @@ def process_pending() -> int:
                 continue
 
             enriched = processor.process(raw, device)
+
+            if enriched is None:
+                # Row failed validation — mark as processed so we don't retry
+                db.mark_telemetry_processed(raw["id"])
+                dropped += 1
+                continue
+
             db.insert_processed_data(enriched)
             db.mark_telemetry_processed(raw["id"])
-            count += 1
+            processed += 1
         except Exception as exc:
             log.error(f"Processing row {raw.get('id')} failed: {exc}")
 
-    return count
+    return {"processed": processed, "dropped": dropped}
 
 
 # =============================================================================
@@ -144,10 +152,10 @@ def process_pending() -> int:
 # =============================================================================
 @app.route("/api/process", methods=["POST"])
 def trigger_processing():
-    n = process_pending()
+    result = process_pending()
     return jsonify({
         "ok": True,
-        "processed": n,
+        **result,
         "ts": datetime.now(timezone.utc).isoformat(),
     })
 
@@ -183,9 +191,12 @@ def _background_loop():
     log.info(f"Background worker started  (interval={PROCESS_INTERVAL}s)")
     while True:
         try:
-            n = process_pending()
-            if n:
-                log.info(f"Background worker processed {n} row(s)")
+            result = process_pending()
+            if result["processed"] or result["dropped"]:
+                log.info(
+                    f"Background worker: {result['processed']} processed, "
+                    f"{result['dropped']} dropped"
+                )
         except Exception as exc:
             log.error(f"Background worker error: {exc}")
         time.sleep(PROCESS_INTERVAL)
