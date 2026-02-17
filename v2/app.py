@@ -7,9 +7,9 @@ GET  /api/readings  — latest processed readings
 GET  /api/stats     — quick summary counts
 GET  /api/health    — health-check
 
-Background worker runs every PROCESS_INTERVAL seconds (default 25 s),
-picks up all unprocessed raw_telemetry rows, runs the processor, and
-writes enriched rows into processed_data.
+Background worker runs every PROCESS_INTERVAL seconds (default 15 s = 5
+ESP32 cycles at 3 s each), picks up all unprocessed raw_telemetry rows,
+runs the processor, and writes enriched rows into processed_data.
 """
 
 import os
@@ -175,7 +175,7 @@ def stats():
 #  BACKGROUND WORKER  (every PROCESS_INTERVAL seconds)
 # =============================================================================
 
-PROCESS_INTERVAL = int(os.environ.get("PROCESS_INTERVAL", 25))
+PROCESS_INTERVAL = int(os.environ.get("PROCESS_INTERVAL", 15))
 
 
 def _background_loop():

@@ -1,22 +1,25 @@
 # GreenRoute Mesh v2 — Project Context
 
-> Last updated: 2026-02-17 · **v0.2**
+> Last updated: 2026-02-17 · **v0.4**
 
 ## Overview
 
 Clean rewrite of the GreenRoute Mesh backend. ESP32 nodes send raw air-quality
-telemetry to a Flask API, which stores it in Supabase. A background worker
-processes the data every 25 seconds.
+telemetry to a Flask API (exposed via ngrok), which stores it in Supabase.
+A background worker processes the data every 15 seconds (5 ESP32 cycles).
 
 ## Architecture
 
 ```
-ESP32 node  ──(POST JSON every 5 s)──►  Flask /api/ingest
+ESP32 node  ──(POST JSON every 3 s)──►  ngrok tunnel
+                                             │
+                                             ▼
+                                      Flask /api/ingest (:5001)
                                              │
                                              ▼
                                       raw_telemetry (Supabase)
                                              │
-                                    background worker (25 s)
+                                    background worker (15 s / 5 cycles)
                                              │
                                              ▼
                                      processed_data (Supabase)
@@ -24,12 +27,12 @@ ESP32 node  ──(POST JSON every 5 s)──►  Flask /api/ingest
 
 ## Data Flow
 
-1. **Ingestion** — ESP32 POSTs raw sensor JSON to `/api/ingest` every 5 seconds.
-   Device is auto-registered on first contact.
-2. **Storage** — Raw payload written to `raw_telemetry` table as-is.
-3. **Processing** — Background thread wakes every 25 s, fetches all
-   `processed=false` rows, runs calibration + derived metrics, writes
-   enriched rows to `processed_data`, marks originals as processed.
+1. **Ingestion** — ESP32 POSTs raw sensor JSON to `/api/ingest` every 3 seconds
+   via ngrok tunnel. Device is auto-registered on first contact.
+2. **Storage** — Raw payload written to `raw_telemetry` table immediately.
+3. **Processing** — Background thread wakes every 15 s (= 5 ESP32 cycles),
+   fetches all `processed=false` rows, runs calibration + derived metrics,
+   writes enriched rows to `processed_data`, marks originals as processed.
 
 ## Supabase Tables Used
 
@@ -53,13 +56,16 @@ ESP32 node  ──(POST JSON every 5 s)──►  Flask /api/ingest
 
 ```
 v2/
-├── app.py              # Flask server + background worker
+├── app.py              # Flask server + background worker (15 s cycle)
 ├── config.py           # Supabase creds, calibration defaults, AQI breakpoints
 ├── processor.py        # Raw → processed conversion (AQI, heat index, etc.)
 ├── supabase_client.py  # Thin Supabase wrapper (devices, raw, processed)
 ├── load_csv.py         # One-shot CSV loader (safe to re-run, --force to reload)
+├── start.py            # Launcher: Flask + ngrok in one command
 ├── requirements.txt    # Frozen pip dependencies
 ├── CONTEXT.md          # This file
+├── esp32/
+│   └── greenroute_node.ino   # ESP32 Arduino firmware
 └── venv/               # Python virtual environment (gitignored)
 ```
 
@@ -89,15 +95,31 @@ python load_csv.py --dry-run        # parse only, no DB writes
 |---|---|---|
 | v0.1 | `59d5ced` | ESP32 ingestion → Supabase `raw_telemetry` |
 | v0.2 | `f2e2c1e` | Processing pipeline + 25 s background worker |
-| v0.3 | — | CSV loader + full pipeline test (250 rows end-to-end) |
+| v0.3 | `b8281d1` | CSV loader + full pipeline test (250 rows end-to-end) |
+| v0.4 | — | ngrok tunnel + ESP32 firmware + 15 s processing interval |
 
 ## Running
 
 ```bash
 cd v2
 source venv/bin/activate
-python app.py          # starts on :5001 with background worker
+
+# Option A: Flask + ngrok (ESP32 can reach you over internet)
+python start.py
+
+# Option B: Flask only (local network / testing)
+python start.py --no-ngrok
+
+# Option C: raw Flask (no start script)
+python app.py
 ```
+
+## ESP32 Setup
+
+1. Flash `esp32/greenroute_node.ino` to your board
+2. Run `python start.py` — it prints the ngrok URL
+3. Paste the URL into the firmware's `serverURL` and re-flash
+4. ESP32 starts sending data every 3 s → backend stores + processes
 
 ## Environment Variables (optional)
 
@@ -106,4 +128,4 @@ python app.py          # starts on :5001 with background worker
 | `SUPABASE_URL` | hardcoded | Supabase project URL |
 | `SUPABASE_SERVICE_KEY` | hardcoded | Service-role key |
 | `PORT` | `5001` | Flask listen port |
-| `PROCESS_INTERVAL` | `25` | Background worker interval (seconds) |
+| `PROCESS_INTERVAL` | `15` | Background worker interval (seconds) |
