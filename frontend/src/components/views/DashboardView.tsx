@@ -13,6 +13,8 @@ import WeatherDetails from '../WeatherDetails';
 import SystemStatus from '../SystemStatus';
 import CitySituationBar from '../CitySituationBar';
 import AirQualityMap from '../AirQualityMap';
+import AIInsightCards from '../AIInsightCards';
+import PredictiveHotspots from '../PredictiveHotspots';
 
 interface DashboardViewProps {
     selectedCity: string;
@@ -127,14 +129,27 @@ const DashboardView = ({ selectedCity, setSelectedCity }: DashboardViewProps) =>
                     <FleetStatus devices={devices} stats={stats} />
                 </div>
 
-                {/* Pipeline & Alerts */}
-                <div className="col-span-12 md:col-span-4 flex flex-col gap-6">
-                    <div className="flex-1">
-                        <SystemStatus stats={stats} />
-                    </div>
-                    <div className="flex-1">
-                        <TemperatureReports reading={latestReading} />
-                    </div>
+                {/* System Pipeline */}
+                <div className="col-span-12 md:col-span-4">
+                    <SystemStatus stats={stats} />
+                </div>
+            </div>
+
+            {/* Alerts & Hotspots Row */}
+            <div className="grid grid-cols-12 gap-6">
+                {/* Live Alerts Feed */}
+                <div className="col-span-12 md:col-span-6 lg:col-span-4">
+                    <AIInsightCards />
+                </div>
+
+                {/* Active Hotspots */}
+                <div className="col-span-12 md:col-span-6 lg:col-span-4">
+                    <PredictiveHotspots />
+                </div>
+
+                {/* Mesh Health Reports */}
+                <div className="col-span-12 lg:col-span-4">
+                    <TemperatureReports reading={latestReading} />
                 </div>
             </div>
         </div>
