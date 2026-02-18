@@ -491,6 +491,19 @@ def resolve_alert(alert_id):
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/api/alerts/<alert_id>", methods=["DELETE"])
+def delete_alert(alert_id):
+    """Delete an alert permanently."""
+    try:
+        deleted = db.delete_alert(alert_id)
+        if not deleted:
+            return jsonify({"error": "Alert not found"}), 404
+        return jsonify({"ok": True, "deleted": alert_id})
+    except Exception as exc:
+        log.error(f"Delete alert error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
 # =============================================================================
 #  USER REPORTS  (anonymous, no login required)
 # =============================================================================
@@ -597,7 +610,19 @@ def upvote_report(report_id):
             return jsonify({"error": "Report not found"}), 404
         return jsonify({"ok": True, "report": report})
     except Exception as exc:
-        log.error(f"Upvote report error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/reports/<report_id>", methods=["DELETE"])
+def delete_report(report_id):
+    """Delete a report permanently."""
+    try:
+        deleted = db.delete_report(report_id)
+        if not deleted:
+            return jsonify({"error": "Report not found"}), 404
+        return jsonify({"ok": True, "deleted": report_id})
+    except Exception as exc:
+        log.error(f"Delete report error: {exc}")
         return jsonify({"error": str(exc)}), 500
 
 

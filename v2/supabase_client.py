@@ -177,6 +177,26 @@ class SupabaseClient:
         """Quick summary counts for /api/stats."""
         devices = self.client.table("devices").select("id", count="exact").execute()
         processed = self.client.table("processed_data").select("id", count="exact").execute()
+        alerts = self.client.table("alerts").select("id", count="exact").execute()
+        active_alerts = (
+            self.client.table("alerts")
+            .select("id", count="exact")
+            .is_("resolved_at", "null")
+            .execute()
+        )
+        reports = self.client.table("reports").select("id", count="exact").execute()
+        open_reports = (
+            self.client.table("reports")
+            .select("id", count="exact")
+            .eq("status", "open")
+            .execute()
+        )
+        hotspots = (
+            self.client.table("identified_hotspots")
+            .select("id", count="exact")
+            .eq("is_active", True)
+            .execute()
+        )
 
         latest = (
             self.client.table("processed_data")
@@ -192,6 +212,11 @@ class SupabaseClient:
             "device_count": devices.count or 0,
             "total_readings": processed.count or 0,
             "avg_aqi_recent": avg_aqi,
+            "alert_count": alerts.count or 0,
+            "active_alert_count": active_alerts.count or 0,
+            "report_count": reports.count or 0,
+            "open_report_count": open_reports.count or 0,
+            "active_hotspot_count": hotspots.count or 0,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -246,6 +271,11 @@ class SupabaseClient:
         )
         log.info(f"Alert resolved: {alert_id}")
         return res.data[0] if res.data else None
+
+    def delete_alert(self, alert_id: str) -> bool:
+        """Delete an alert by id."""
+        res = self.client.table("alerts").delete().eq("id", alert_id).execute()
+        return bool(res.data)
 
     def get_active_alert_for_device(self, device_id: str, alert_type: str) -> Optional[Dict]:
         """Check if there's already an active (unresolved) alert of this type for this device."""
@@ -315,6 +345,11 @@ class SupabaseClient:
         )
         log.info(f"Report {report_id} → {status}")
         return res.data[0] if res.data else None
+
+    def delete_report(self, report_id: str) -> bool:
+        """Delete a report by id."""
+        res = self.client.table("reports").delete().eq("id", report_id).execute()
+        return bool(res.data)
 
     def upvote_report(self, report_id: str) -> Optional[Dict]:
         """Increment upvote count on a report."""
