@@ -7,8 +7,7 @@ Pipeline per row:
   1. Sensor calibration   (dust→PM2.5, MQ135→CO₂, MQ7→CO)
   2. GPS fallback         (0,0 → device static location)
   3. Derived metrics      (AQI, Heat Index, Toxic Gas Index, Respiratory Risk)
-  4. Movement             (speed + distance from previous GPS fix)
-
+  4. Movement             (speed + distance from previous GPS fix)  5. XGBoost enhancement  (calibration, source detection, radius prediction)
 Rows that fail validation are skipped (process() returns None).
 """
 
@@ -20,7 +19,20 @@ from typing import Dict, List, Optional, Tuple
 
 from config import processing_config, device_defaults
 
+# XGBoost inference (optional — gracefully handles missing models)
+try:
+    from xgboost_inference import get_predictor
+    _xgb_predictor = get_predictor(models_dir="models", mode="auto")
+    XGBOOST_ENABLED = True
+except Exception as e:
+    _xgb_predictor = None
+    XGBOOST_ENABLED = False
+
 log = logging.getLogger("greenroute.processor")
+if XGBOOST_ENABLED:
+    log.info("XGBoost inference enabled")
+else:
+    log.info("XGBoost inference disabled (models not found or error)")
 
 
 # ── Sensor bounds (physically plausible ranges) ──────────────────────────────
@@ -357,12 +369,58 @@ class DataProcessor:
         ts = datetime.fromisoformat(raw["recorded_at"].replace("Z", "+00:00"))
         speed, dist = self.movement(raw["device_id"], lat, lon, ts)
 
+        # ── XGBoost ENHANCEMENT (Step 5) ──────────────────────────────
+        # Apply ML-based calibration, source detection, and radius prediction
+        pm25_calibrated = pm25
+        source_class = "normal"
+        source_confidence = 0.5
+        is_false_positive = False
+        influence_radius = 500.0  # default radius in meters
+
+        if XGBOOST_ENABLED and _xgb_predictor is not None:
+            try:
+                hour = ts.hour
+                is_rush = hour in [7, 8, 9, 17, 18, 19]
+
+                # 1. Calibrate PM2.5 based on environmental conditions
+                pm25_calibrated = _xgb_predictor.calibrate_reading(
+                    raw_pm25=pm25 or 0,
+                    temp=temp or 30,
+                    humidity=hum or 70,
+                    hour=hour,
+                    is_rush_hour=is_rush,
+                )
+
+                # 2. Classify pollution source (detect false positives)
+                source_class, source_confidence = _xgb_predictor.classify_source(
+                    pm25=pm25_calibrated,
+                    co_ppm=co or 0,
+                    hour=hour,
+                    is_rush_hour=is_rush,
+                    temp=temp or 30,
+                    humidity=hum or 70,
+                )
+                is_false_positive = source_class in ("smoking", "sensor_fault")
+
+                # 3. Predict spatial influence radius
+                influence_radius = _xgb_predictor.predict_radius(
+                    pm25=pm25_calibrated,
+                    aqi=aqi_val,
+                    temp=temp or 30,
+                    humidity=hum or 70,
+                    hour=hour,
+                    is_rush_hour=is_rush,
+                )
+            except Exception as e:
+                log.debug(f"XGBoost inference error: {e}")
+
         return {
             "raw_telemetry_id":     raw["id"],
             "device_id":            raw["device_id"],
             "recorded_at":          raw["recorded_at"],
 
             "pm25_ugm3":            pm25,
+            "pm25_calibrated":      pm25_calibrated,  # XGBoost-adjusted
             "co2_ppm":              co2,
             "co_ppm":               co,
 
@@ -383,6 +441,12 @@ class DataProcessor:
 
             "speed_kmh":            speed,
             "distance_moved_m":     dist,
+
+            # XGBoost-enhanced fields
+            "source_classification": source_class,
+            "source_confidence":    source_confidence,
+            "is_false_positive":    is_false_positive,
+            "influence_radius_m":   influence_radius,
         }
 
 
