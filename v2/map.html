@@ -51,6 +51,12 @@
   }
   .toggle-group button:hover:not(.active) { background: #eee; }
 
+  /* ── Smooth circle shadows ───────────────────────────── */
+  .leaflet-overlay-pane svg circle,
+  .leaflet-overlay-pane svg path {
+    filter: drop-shadow(0 0 3px rgba(0,0,0,.08));
+  }
+
   /* ── Opacity slider ───────────────────────────────────── */
   input[type=range] {
     -webkit-appearance: none; height: 4px; border-radius: 2px;
@@ -184,7 +190,6 @@
   <div class="toggle-group" id="modeToggle">
     <button data-mode="heatmap" class="active">Heatmap</button>
     <button data-mode="contours">Zones</button>
-    <button data-mode="points">Points</button>
   </div>
 
   <label>Opacity <span id="opacityVal">50%</span></label>
@@ -206,6 +211,7 @@
     <label><input type="checkbox" id="layerDevices" checked> Devices</label>
     <label><input type="checkbox" id="layerHotspots" checked> Hotspots</label>
     <label><input type="checkbox" id="layerZones" checked> Zone overlay</label>
+    <label><input type="checkbox" id="layerBubbles" checked> Sensor bubbles</label>
   </div>
 
   <div class="refresh-bar">
@@ -259,6 +265,7 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
 
 let zoneLayer = null;
 let pointLayer = null;
+let bubbleLayer = null;   // sensor reading bubbles with radius
 let imageOverlay = null;  // smooth canvas heatmap
 let deviceLayer = null;   // device markers
 let hotspotLayer = null;  // hotspot circles + pulse markers
@@ -282,6 +289,7 @@ const $legend = document.getElementById('legend');
 const $layerDevices = document.getElementById('layerDevices');
 const $layerHotspots = document.getElementById('layerHotspots');
 const $layerZones = document.getElementById('layerZones');
+const $layerBubbles = document.getElementById('layerBubbles');
 const $refreshStatus = document.getElementById('refreshStatus');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -433,9 +441,7 @@ async function loadZones() {
 
     const meta = geojson.metadata || {};
 
-    if (currentMode === 'points') {
-      renderPoints(geojson);
-    } else if (currentMode === 'contours') {
+    if (currentMode === 'contours') {
       renderContours(geojson);
     } else {
       renderHeatmap(geojson);
@@ -565,53 +571,206 @@ function renderHeatmap(geojson) {
 }
 
 function renderContours(geojson) {
-  zoneLayer = L.geoJSON(geojson, {
-    smoothFactor: 3,
-    style: feature => {
-      const color = feature.properties.color || '#888';
-      return {
-        fillColor: color,
-        fillOpacity: globalOpacity * 0.55,
-        color: color,
-        weight: 1.5,
-        opacity: globalOpacity * 0.7,
-        lineJoin: 'round',
-        lineCap: 'round',
-      };
-    },
-    onEachFeature: (feature, layer) => {
-      const p = feature.properties;
-      layer.bindPopup(`
-        <strong>${p.category}</strong><br>
-        ${p.cell_count} cells
-      `);
-    },
-  }).addTo(map);
+  zoneLayer = L.layerGroup();
+
+  const features = geojson.features || [];
+  const meta = geojson.metadata || {};
+  const bounds = meta.bounds;
+  if (!bounds) return;
+
+  const res = meta.grid_resolution || parseInt($resolution.value);
+  const dlat = (bounds.lat_max - bounds.lat_min) / res;
+  const dlon = (bounds.lon_max - bounds.lon_min) / res;
+  // Each cell → a circle whose radius = half a cell diagonal (in metres)
+  const cellRadiusM = Math.sqrt(dlat * dlat + dlon * dlon) / 2 * 111320;
+
+  for (const f of features) {
+    const p = f.properties;
+    const color = p.color || '#888';
+
+    // Get cell centre
+    let lat, lon;
+    if (f.geometry.type === 'Point') {
+      [lon, lat] = f.geometry.coordinates;
+    } else {
+      // Polygon — take centroid of SW+NE corners
+      const coords = f.geometry.coordinates[0];
+      lon = (coords[0][0] + coords[2][0]) / 2;
+      lat = (coords[0][1] + coords[2][1]) / 2;
+    }
+
+    const circle = L.circle([lat, lon], {
+      radius: cellRadiusM * 1.15,  // slight overlap for seamless look
+      fillColor: color,
+      fillOpacity: globalOpacity * 0.5,
+      color: color,
+      weight: 0,
+      opacity: 0,
+    });
+
+    circle.bindPopup(`
+      <strong>${p.category || '—'}</strong><br>
+      ${p.cell_count ? p.cell_count + ' cells' : ''}
+    `);
+
+    circle.addTo(zoneLayer);
+  }
+  zoneLayer.addTo(map);
 }
 
 function renderPoints(geojson) {
-  pointLayer = L.geoJSON(geojson, {
-    pointToLayer: (feature, latlng) => {
-      const p = feature.properties;
-      const color = valueToColor(p.value, currentField);
-      return L.circleMarker(latlng, {
-        radius: 8,
+  pointLayer = L.layerGroup();
+
+  const sc = FIELD_SCALES[currentField] || {};
+  const features = geojson.features || [];
+
+  // Find value range for radius scaling
+  const vals = features.map(f => f.properties.value).filter(v => v != null);
+  const vMin = Math.min(...vals), vMax = Math.max(...vals);
+  const vSpan = vMax - vMin || 1;
+
+  for (const feature of features) {
+    const p = feature.properties;
+    if (!feature.geometry || !feature.geometry.coordinates) continue;
+    const [lon, lat] = feature.geometry.coordinates;
+    const color = valueToColor(p.value, currentField);
+
+    // Radius in metres — scales with value (300m–800m)
+    const t = (p.value - vMin) / vSpan;
+    const radiusM = 300 + t * 500;
+
+    // Outer glow circle (geo-radius, scales with zoom)
+    const glow = L.circle([lat, lon], {
+      radius: radiusM,
+      fillColor: color,
+      fillOpacity: globalOpacity * 0.25,
+      color: color,
+      weight: 1,
+      opacity: globalOpacity * 0.35,
+    });
+
+    // Inner solid bubble
+    const inner = L.circle([lat, lon], {
+      radius: radiusM * 0.35,
+      fillColor: color,
+      fillOpacity: globalOpacity * 0.8,
+      color: '#fff',
+      weight: 2,
+      opacity: 0.9,
+    });
+
+    const popup = `
+      <strong>${sc.label || currentField}:</strong> ${p.value} ${sc.unit || ''}<br>
+      ${p.category ? `<strong>Category:</strong> ${p.category}` : ''}
+    `;
+    glow.bindPopup(popup);
+    inner.bindPopup(popup);
+
+    glow.addTo(pointLayer);
+    inner.addTo(pointLayer);
+  }
+  pointLayer.addTo(map);
+}
+
+// ── Sensor reading bubbles (always-on layer) ────────────────────────────────
+
+async function loadBubbles() {
+  if (!$layerBubbles.checked) {
+    if (bubbleLayer) { map.removeLayer(bubbleLayer); bubbleLayer = null; }
+    return;
+  }
+  try {
+    const resp = await fetch(`${API_BASE}/api/readings?limit=200`);
+    const json = await resp.json();
+    if (!json.ok || !json.readings || !json.readings.length) return;
+
+    if (bubbleLayer) { map.removeLayer(bubbleLayer); bubbleLayer = null; }
+    bubbleLayer = L.layerGroup();
+
+    const sc = FIELD_SCALES[currentField] || {};
+    const readings = json.readings;
+
+    // Aggregate by device — latest reading per device
+    const byDevice = {};
+    for (const r of readings) {
+      const did = r.device_id;
+      if (!byDevice[did]) byDevice[did] = r;
+    }
+    const devices = Object.values(byDevice);
+
+    // Value range for radius scaling
+    const vals = devices.map(d => d[currentField]).filter(v => v != null);
+    if (!vals.length) return;
+    const vMin = Math.min(...vals), vMax = Math.max(...vals);
+    const vSpan = vMax - vMin || 1;
+
+    for (const d of devices) {
+      const lat = d.latitude, lon = d.longitude;
+      if (!lat || !lon) continue;
+      const val = d[currentField];
+      if (val == null) continue;
+      const color = valueToColor(val, currentField);
+
+      // Radius scales with value — 400m to 1200m
+      const t = (val - vMin) / vSpan;
+      const radiusM = 400 + t * 800;
+
+      // Outer influence ring (geo-radius, scales with zoom)
+      const ring = L.circle([lat, lon], {
+        radius: radiusM,
         fillColor: color,
-        fillOpacity: globalOpacity,
+        fillOpacity: globalOpacity * 0.18,
+        color: color,
+        weight: 1.5,
+        opacity: globalOpacity * 0.4,
+      });
+
+      // Inner solid bubble
+      const inner = L.circle([lat, lon], {
+        radius: radiusM * 0.25,
+        fillColor: color,
+        fillOpacity: globalOpacity * 0.75,
         color: '#fff',
         weight: 2,
         opacity: 0.9,
       });
-    },
-    onEachFeature: (feature, layer) => {
-      const p = feature.properties;
-      const scale = FIELD_SCALES[currentField] || {};
-      layer.bindPopup(`
-        <strong>${scale.label || currentField}:</strong> ${p.value} ${scale.unit || ''}<br>
-        ${p.category ? `<strong>Category:</strong> ${p.category}` : ''}
-      `);
-    },
-  }).addTo(map);
+
+      // Value label at centre
+      const labelIcon = L.divIcon({
+        className: '',
+        html: `<div style="
+          font-size:11px; font-weight:700; color:#fff;
+          text-shadow: 0 1px 3px rgba(0,0,0,.6);
+          text-align:center; line-height:1; white-space:nowrap;
+          pointer-events:none;
+        ">${Math.round(val)}</div>`,
+        iconSize: [40, 16],
+        iconAnchor: [20, 8],
+      });
+      const label = L.marker([lat, lon], { icon: labelIcon, interactive: false });
+
+      const popup = `
+        <div class="device-popup">
+          <div class="dp-name">${d.device_id}</div>
+          <div class="dp-row"><span class="dp-label">${sc.label || currentField}</span>
+            <span class="dp-val" style="color:${color}; font-size:14px;">${val} ${sc.unit || ''}</span></div>
+          <div class="dp-row"><span class="dp-label">Radius</span><span class="dp-val">${Math.round(radiusM)} m</span></div>
+          ${d.aqi_category ? `<div class="dp-row"><span class="dp-label">Category</span><span class="dp-val">${d.aqi_category}</span></div>` : ''}
+          ${d.respiratory_risk_label ? `<div class="dp-row"><span class="dp-label">Risk</span><span class="dp-val">${d.respiratory_risk_label}</span></div>` : ''}
+          <div class="dp-row"><span class="dp-label">Time</span><span class="dp-val">${(d.recorded_at || '').slice(0, 16)}</span></div>
+        </div>
+      `;
+      ring.bindPopup(popup, { maxWidth: 280 });
+      inner.bindPopup(popup, { maxWidth: 280 });
+
+      ring.addTo(bubbleLayer);
+      inner.addTo(bubbleLayer);
+      label.addTo(bubbleLayer);
+    }
+    bubbleLayer.addTo(map);
+  } catch (err) {
+    console.error('Bubble load error:', err);
+  }
 }
 
 // ── Event listeners ──────────────────────────────────────────────────────────
@@ -620,6 +779,7 @@ $field.addEventListener('change', () => {
   currentField = $field.value;
   updateLegend(currentField);
   loadZones();
+  loadBubbles();
 });
 
 // ── Debounce helper ──────────────────────────────────────────────────────────
@@ -701,10 +861,23 @@ async function loadDevices() {
       const name = dev.name || dev.device_id;
       const color = deviceAqiColor(aqi);
 
-      const marker = L.circleMarker([lat, lon], {
-        radius: 10,
+      // Outer influence ring (real metres — scales with zoom)
+      const ring = L.circle([lat, lon], {
+        radius: 600,
         fillColor: color,
-        fillOpacity: 0.9,
+        fillOpacity: 0.12,
+        color: color,
+        weight: 1.5,
+        opacity: 0.3,
+        dashArray: '6 4',
+      });
+      ring.addTo(deviceLayer);
+
+      // Inner solid bubble
+      const marker = L.circle([lat, lon], {
+        radius: 150,
+        fillColor: color,
+        fillOpacity: 0.85,
         color: '#fff',
         weight: 2.5,
         opacity: 1,
@@ -727,6 +900,7 @@ async function loadDevices() {
 
       // Tooltip on hover
       marker.bindTooltip(name, { direction: 'top', offset: [0, -10], className: 'device-tooltip' });
+      ring.bindPopup(marker.getPopup());
 
       marker.addTo(deviceLayer);
     }
@@ -814,6 +988,7 @@ async function loadHotspots() {
 function clearZoneLayers() {
   if (zoneLayer)    { map.removeLayer(zoneLayer);    zoneLayer = null; }
   if (pointLayer)   { map.removeLayer(pointLayer);   pointLayer = null; }
+  if (bubbleLayer)  { map.removeLayer(bubbleLayer);  bubbleLayer = null; }
   if (imageOverlay) { map.removeLayer(imageOverlay); imageOverlay = null; }
 }
 
@@ -822,6 +997,7 @@ function clearZoneLayers() {
 async function refreshAll() {
   await Promise.all([
     $layerZones.checked ? loadZones() : Promise.resolve(clearZoneLayers()),
+    loadBubbles(),
     loadDevices(),
     loadHotspots(),
   ]);
@@ -846,6 +1022,7 @@ function startAutoRefresh() {
 
 $layerDevices.addEventListener('change', loadDevices);
 $layerHotspots.addEventListener('change', loadHotspots);
+$layerBubbles.addEventListener('change', loadBubbles);
 $layerZones.addEventListener('change', () => {
   if ($layerZones.checked) loadZones();
   else clearZoneLayers();
