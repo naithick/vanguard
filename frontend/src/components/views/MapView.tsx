@@ -441,26 +441,43 @@ const MapView = () => {
                 {/* Points Layer */}
                 {mode === 'points' && geoJsonData && geoJsonData.features && (
                     <>
-                        {geoJsonData.features.map((f: any, i: number) => (
-                            <CircleMarker
-                                key={i}
-                                center={[f.geometry.coordinates[1], f.geometry.coordinates[0]]}
-                                radius={6}
-                                pathOptions={{
-                                    fillColor: valueToColor(f.properties.value, field),
-                                    fillOpacity: opacity / 100,
-                                    color: '#fff',
-                                    weight: 1,
-                                    opacity: 0.9
-                                }}
-                            >
-                                <Popup>
-                                    <div className="text-xs">
-                                        <strong>{FIELD_SCALES[field].label}:</strong> {f.properties.value} {FIELD_SCALES[field].unit}
-                                    </div>
-                                </Popup>
-                            </CircleMarker>
-                        ))}
+                        {geoJsonData.features.map((f: any, i: number) => {
+                            // Calculate centroid for Polygon geometry
+                            let lat = 0, lon = 0;
+                            if (f.geometry.type === 'Polygon') {
+                                const coords = f.geometry.coordinates[0];
+                                // Centroid of polygon (average of vertices)
+                                coords.forEach((c: number[]) => { lon += c[0]; lat += c[1]; });
+                                lon /= coords.length;
+                                lat /= coords.length;
+                            } else if (f.geometry.type === 'Point') {
+                                lon = f.geometry.coordinates[0];
+                                lat = f.geometry.coordinates[1];
+                            }
+                            
+                            if (lat === 0 && lon === 0) return null;
+                            
+                            return (
+                                <CircleMarker
+                                    key={i}
+                                    center={[lat, lon]}
+                                    radius={6}
+                                    pathOptions={{
+                                        fillColor: valueToColor(f.properties.value, field),
+                                        fillOpacity: opacity / 100,
+                                        color: '#fff',
+                                        weight: 1,
+                                        opacity: 0.9
+                                    }}
+                                >
+                                    <Popup>
+                                        <div className="text-xs">
+                                            <strong>{FIELD_SCALES[field].label}:</strong> {f.properties.value?.toFixed(1) ?? 'N/A'} {FIELD_SCALES[field].unit}
+                                        </div>
+                                    </Popup>
+                                </CircleMarker>
+                            );
+                        })}
                     </>
                 )}
             </MapContainer>

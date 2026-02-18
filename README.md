@@ -52,6 +52,12 @@ greenroute/
 | Node.js | 18+ | [nodejs.org](https://nodejs.org/) |
 | Git | Latest | [git-scm.com](https://git-scm.com/) |
 
+> **⚠️ IMPORTANT: Always use a virtual environment (venv)**
+> 
+> Never install Python packages globally with `pip install`. Always create and activate a virtual environment first to avoid conflicts with system packages.
+> 
+> The start scripts (`start_backend.sh` / `start_backend.bat`) automatically create and use a venv for you.
+
 ### Clone Repository
 
 ```bash

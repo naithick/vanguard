@@ -286,6 +286,128 @@ def get_readings():
 
 
 # =============================================================================
+#  GET /api/readings/history/monthly — daily aggregates for calendar view
+# =============================================================================
+@app.route("/api/readings/history/monthly", methods=["GET"])
+def get_monthly_history():
+    """
+    Get daily aggregated readings for a specific month.
+    Query params: year (int), month (int, 1-12)
+    Returns daily averages for AQI, temp, humidity, PM2.5, CO, etc.
+    """
+    try:
+        year = request.args.get("year", type=int)
+        month = request.args.get("month", type=int)
+        
+        if not year or not month:
+            return jsonify({"error": "year and month required"}), 400
+        
+        if month < 1 or month > 12:
+            return jsonify({"error": "month must be 1-12"}), 400
+        
+        # Build date range for the month
+        from datetime import datetime, timedelta
+        import calendar
+        
+        days_in_month = calendar.monthrange(year, month)[1]
+        start_date = datetime(year, month, 1)
+        end_date = datetime(year, month, days_in_month, 23, 59, 59)
+        
+        # Query processed_data for this month
+        result = db.client.table("processed_data") \
+            .select("*") \
+            .gte("recorded_at", start_date.isoformat()) \
+            .lte("recorded_at", end_date.isoformat()) \
+            .order("recorded_at", desc=False) \
+            .execute()
+        
+        readings = result.data if result.data else []
+        
+        # Aggregate by day
+        daily_data = {}
+        for r in readings:
+            recorded = r.get("recorded_at", "")
+            if recorded:
+                day = int(recorded[8:10])  # Extract day from ISO date
+                if day not in daily_data:
+                    daily_data[day] = {
+                        "day": day,
+                        "aqi_values": [],
+                        "temps": [],
+                        "humidities": [],
+                        "pm25_values": [],
+                        "co_values": [],
+                        "readings_count": 0
+                    }
+                
+                daily_data[day]["aqi_values"].append(r.get("aqi_value", 0) or 0)
+                daily_data[day]["temps"].append(r.get("temperature_c", 0) or 0)
+                daily_data[day]["humidities"].append(r.get("humidity_pct", 0) or 0)
+                daily_data[day]["pm25_values"].append(r.get("pm25_ugm3", 0) or 0)
+                daily_data[day]["co_values"].append(r.get("co_ppm", 0) or 0)
+                daily_data[day]["readings_count"] += 1
+        
+        # Calculate averages and determine status
+        def get_aqi_status(aqi):
+            if aqi <= 50:
+                return "Good"
+            elif aqi <= 100:
+                return "Moderate"
+            elif aqi <= 200:
+                return "Unhealthy"
+            else:
+                return "Hazardous"
+        
+        def get_weather(temp, humidity):
+            if humidity > 80:
+                return "Rainy"
+            elif temp > 35:
+                return "Sunny"
+            elif humidity > 60:
+                return "Cloudy"
+            else:
+                return "Clear"
+        
+        processed = []
+        for day, data in sorted(daily_data.items()):
+            avg_aqi = sum(data["aqi_values"]) / len(data["aqi_values"]) if data["aqi_values"] else 0
+            avg_temp = sum(data["temps"]) / len(data["temps"]) if data["temps"] else 0
+            avg_humidity = sum(data["humidities"]) / len(data["humidities"]) if data["humidities"] else 0
+            avg_pm25 = sum(data["pm25_values"]) / len(data["pm25_values"]) if data["pm25_values"] else 0
+            avg_co = sum(data["co_values"]) / len(data["co_values"]) if data["co_values"] else 0
+            
+            # Determine primary pollutant
+            primary = "PM2.5" if avg_pm25 > avg_co * 10 else "CO"
+            
+            processed.append({
+                "day": day,
+                "aqi": round(avg_aqi),
+                "status": get_aqi_status(avg_aqi),
+                "temp": round(avg_temp, 1),
+                "humidity": round(avg_humidity, 1),
+                "weather": get_weather(avg_temp, avg_humidity),
+                "primaryPollutant": primary,
+                "avg_pm25": round(avg_pm25, 2),
+                "avg_co": round(avg_co, 2),
+                "readings_count": data["readings_count"],
+                # Add alert if AQI is unhealthy
+                "alert": f"High pollution detected (AQI: {round(avg_aqi)})" if avg_aqi > 150 else None
+            })
+        
+        return jsonify({
+            "ok": True,
+            "data": processed,
+            "year": year,
+            "month": month,
+            "total_readings": len(readings)
+        })
+        
+    except Exception as exc:
+        log.error(f"Monthly history error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+# =============================================================================
 #  DASHBOARD ENDPOINTS
 # =============================================================================
 
