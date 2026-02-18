@@ -193,8 +193,8 @@
   <label>Grid Resolution</label>
   <select id="resolution">
     <option value="15">Low (15×15)</option>
-    <option value="30" selected>Medium (30×30)</option>
-    <option value="50">High (50×50)</option>
+    <option value="30">Medium (30×30)</option>
+    <option value="50" selected>High (50×50)</option>
     <option value="70">Ultra (70×70)</option>
   </select>
 
@@ -319,6 +319,64 @@ function lerpColor(a, b, t) {
   return `#${((rr << 16) | (rg << 8) | rb).toString(16).padStart(6, '0')}`;
 }
 
+// ── Grid smoothing utilities ─────────────────────────────────────────────────
+
+/** Fill NaN gaps via iterative nearest-neighbour averaging (up to `passes` rounds). */
+function fillGridGaps(grid, rows, cols, passes = 3) {
+  for (let p = 0; p < passes; p++) {
+    let filled = 0;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!isNaN(grid[r][c])) continue;
+        let sum = 0, n = 0;
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            if (dr === 0 && dc === 0) continue;
+            const rr = r + dr, cc = c + dc;
+            if (rr >= 0 && rr < rows && cc >= 0 && cc < cols && !isNaN(grid[rr][cc])) {
+              sum += grid[rr][cc];
+              n++;
+            }
+          }
+        }
+        if (n >= 2) { grid[r][c] = sum / n; filled++; }
+      }
+    }
+    if (filled === 0) break;
+  }
+}
+
+/** Apply Gaussian-like 3×3 blur to the grid (in-place, `iterations` times). */
+function gaussianBlur(grid, rows, cols, iterations = 2) {
+  const kernel = [
+    [1, 2, 1],
+    [2, 4, 2],
+    [1, 2, 1],
+  ];
+  const kSum = 16;
+  for (let iter = 0; iter < iterations; iter++) {
+    const tmp = Array.from({ length: rows }, (_, r) => Float32Array.from(grid[r]));
+    for (let r = 1; r < rows - 1; r++) {
+      for (let c = 1; c < cols - 1; c++) {
+        if (isNaN(grid[r][c])) continue;
+        let acc = 0, wSum = 0;
+        for (let kr = -1; kr <= 1; kr++) {
+          for (let kc = -1; kc <= 1; kc++) {
+            const v = grid[r + kr][c + kc];
+            if (!isNaN(v)) {
+              const w = kernel[kr + 1][kc + 1];
+              acc += v * w;
+              wSum += w;
+            }
+          }
+        }
+        tmp[r][c] = acc / wSum;
+      }
+    }
+    for (let r = 0; r < rows; r++) grid[r] = tmp[r];
+  }
+}
+
 function updateLegend(field) {
   const scale = FIELD_SCALES[field];
   if (!scale) return;
@@ -438,7 +496,11 @@ function renderHeatmap(geojson) {
     }
   }
 
-  // ── 2. Render to small canvas (grid-size pixels) ────────────────────
+  // ── 2. Fill gaps + Gaussian smooth ──────────────────────────────────
+  fillGridGaps(grid, res, res, 4);
+  gaussianBlur(grid, res, res, 3);
+
+  // ── 3. Render to small canvas (grid-size pixels) ────────────────────
   const tinyCanvas = document.createElement('canvas');
   tinyCanvas.width = res;
   tinyCanvas.height = res;
@@ -465,17 +527,22 @@ function renderHeatmap(geojson) {
   }
   tinyCtx.putImageData(imgData, 0, 0);
 
-  // ── 3. Upscale with bilinear smoothing ──────────────────────────────
-  const scale = 16;  // 30×30 → 480×480 pixels — browser interpolates smoothly
+  // ── 4. Upscale with bilinear smoothing ──────────────────────────────
+  const upscale = Math.max(16, Math.ceil(800 / res));  // target ~800px
   const bigCanvas = document.createElement('canvas');
-  bigCanvas.width = res * scale;
-  bigCanvas.height = res * scale;
+  bigCanvas.width = res * upscale;
+  bigCanvas.height = res * upscale;
   const bigCtx = bigCanvas.getContext('2d');
   bigCtx.imageSmoothingEnabled = true;
   bigCtx.imageSmoothingQuality = 'high';
   bigCtx.drawImage(tinyCanvas, 0, 0, bigCanvas.width, bigCanvas.height);
 
-  // ── 4. Overlay on map ──────────────────────────────────────────────
+  // Extra CSS-level blur for silky transitions
+  bigCtx.filter = 'blur(4px)';
+  bigCtx.drawImage(bigCanvas, 0, 0);
+  bigCtx.filter = 'none';
+
+  // ── 5. Overlay on map ──────────────────────────────────────────────
   const imgBounds = [[latMin, lonMin], [latMax, lonMax]];
   imageOverlay = L.imageOverlay(
     bigCanvas.toDataURL('image/png'),
@@ -499,14 +566,17 @@ function renderHeatmap(geojson) {
 
 function renderContours(geojson) {
   zoneLayer = L.geoJSON(geojson, {
+    smoothFactor: 3,
     style: feature => {
       const color = feature.properties.color || '#888';
       return {
         fillColor: color,
-        fillOpacity: globalOpacity * 0.6,
+        fillOpacity: globalOpacity * 0.55,
         color: color,
-        weight: 1,
-        opacity: globalOpacity * 0.8,
+        weight: 1.5,
+        opacity: globalOpacity * 0.7,
+        lineJoin: 'round',
+        lineCap: 'round',
       };
     },
     onEachFeature: (feature, layer) => {

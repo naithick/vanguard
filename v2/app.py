@@ -21,6 +21,10 @@ POST /api/reports           — create report
 PUT  /api/reports/<id>/status — update status
 POST /api/reports/<id>/upvote — upvote a report
 
+REPORT EXPORT:
+GET  /api/reports/generate  — generate air-quality summary (day/week/month/quarter/year)
+                              ?period=day&format=json|excel|pdf&device=<optional>
+
 Real-time: each ingest request immediately processes the row inline.
 Background worker (safety net) runs every 30 s to catch any rows that
 slipped through (errors, race conditions, CSV bulk loads).
@@ -34,7 +38,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
 # Allow imports from the same directory
@@ -44,6 +48,7 @@ from supabase_client import db
 from processor import processor
 from zones import zone_builder
 from hotspots import detect_hotspots, get_hotspot_summary, get_all_hotspots, get_hotspot
+from report_gen import generate_summary, generate_excel, generate_pdf
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -739,6 +744,58 @@ def trigger_hotspot_detection():
         return jsonify({"ok": True, **result})
     except Exception as exc:
         log.error(f"Hotspot detection error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+# =============================================================================
+#  REPORT GENERATION & EXPORT
+# =============================================================================
+
+@app.route("/api/reports/generate", methods=["GET"])
+def generate_report():
+    """
+    Generate an air-quality report for a period.
+
+    Query params:
+        period  — day | week | month | quarter | year  (default: day)
+        format  — json | excel | pdf                   (default: json)
+        device  — optional device_id filter
+    """
+    period = request.args.get("period", "day")
+    fmt = request.args.get("format", "json").lower()
+    device_id = request.args.get("device", None)
+
+    valid_periods = {"day", "week", "month", "quarter", "year"}
+    if period not in valid_periods:
+        return jsonify({"error": f"Invalid period. Choose from: {', '.join(sorted(valid_periods))}"}), 400
+
+    try:
+        if fmt == "excel":
+            buf = generate_excel(db, period=period, device_id=device_id)
+            filename = f"greenroute_report_{period}_{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            return send_file(
+                buf,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                as_attachment=True,
+                download_name=filename,
+            )
+
+        elif fmt == "pdf":
+            buf = generate_pdf(db, period=period, device_id=device_id)
+            filename = f"greenroute_report_{period}_{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+            return send_file(
+                buf,
+                mimetype="application/pdf",
+                as_attachment=True,
+                download_name=filename,
+            )
+
+        else:  # JSON
+            summary = generate_summary(db, period=period, device_id=device_id)
+            return jsonify({"ok": True, **summary})
+
+    except Exception as exc:
+        log.error(f"Report generation error: {exc}")
         return jsonify({"error": str(exc)}), 500
 
 

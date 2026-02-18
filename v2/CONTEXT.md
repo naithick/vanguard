@@ -1,6 +1,6 @@
 # GreenRoute Mesh v2 — Project Context
 
-> Last updated: 2026-02-18 · **v1.4**
+> Last updated: 2026-02-18 · **v1.5**
 
 ## Overview
 
@@ -93,6 +93,10 @@ CPCB .xlsx/.csv  ──►  load_cpcb.py (reverse calibration)  ──►      �
 | POST | `/api/reports` | Create anonymous report (title, category, severity, lat/lon) |
 | PUT | `/api/reports/<id>/status` | Update status (open → investigating → resolved) |
 | POST | `/api/reports/<id>/upvote` | Upvote a report |
+| DELETE | `/api/alerts/<id>` | Delete an alert |
+| DELETE | `/api/reports/<id>` | Delete a report |
+| **Report Export** | | |
+| GET | `/api/reports/generate` | Generate report (day/week/month/quarter/year → JSON/Excel/PDF) |
 | **Hotspots** | | |
 | GET | `/api/hotspots` | List hotspots (`?include_resolved=true`, `?limit=`) |
 | GET | `/api/hotspots/active` | Active hotspots only, sorted by severity |
@@ -107,11 +111,12 @@ v2/
 ├── config.py           # Supabase creds, calibration defaults, AQI breakpoints
 ├── processor.py        # Raw → processed (AQI, heat index, NULL imputation, etc.)
 ├── hotspots.py         # Hotspot detection engine (AQI threshold, auto-resolve)
+├── report_gen.py       # Report generator (day/week/month/quarter → JSON/Excel/PDF)
 ├── zones.py            # IDW interpolation → continuous air-quality zones (GeoJSON)
 ├── supabase_client.py  # Supabase wrapper (batch upsert, chunks of 500)
 ├── load_csv.py         # Legacy CSV loader (esp32-csv-test device)
 ├── load_cpcb.py        # CPCB station loader (5 stations, reverse calibration)
-├── map.html            # Map viewer (Leaflet — devices, hotspots, heatmap, auto-refresh)
+├── map.html            # Map viewer (Leaflet — Gaussian-smoothed heatmap, devices, hotspots)
 ├── start.py            # Launcher: Flask + ngrok in one command
 ├── requirements.txt    # Frozen pip dependencies
 ├── CONTEXT.md          # This file
@@ -324,3 +329,4 @@ python app.py
 | v1.2 | `6d4a6cd` | Alert system + anonymous user reporting (backend only, no auth) |
 | v1.3 | `3ae34d0` | Hotspot detection, NULL imputation, modular test suite (57 checks) |
 | v1.4 | — | Dynamic map: live devices, hotspot overlays, auto-refresh, CONTEXT update |
+| v1.5 | — | Report export (JSON/Excel/PDF), map Gaussian smoothing, DELETE endpoints |
