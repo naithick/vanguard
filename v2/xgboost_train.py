@@ -253,34 +253,88 @@ def label_pollution_source(row: pd.Series) -> str:
 # MODEL 1: CALIBRATION MODEL
 # ══════════════════════════════════════════════════════════════════════════════
 
-def train_calibration_model(cpcb_df: pd.DataFrame, output_dir: Path) -> Dict:
+def train_calibration_model(cpcb_df: pd.DataFrame, esp32_df: pd.DataFrame, output_dir: Path) -> Dict:
     """
     Train a model to correct ESP32 raw sensor readings.
     
-    Since we don't have paired ESP32 + CPCB data from same location/time,
-    we train on CPCB data to learn the relationship between:
-    - Input: raw environmental conditions (temp, humidity, pressure)
-    - Output: calibration factors for different pollutants
+    Two approaches combined:
+    1. CPCB data: Learn relationship between environmental conditions and pollutant levels
+    2. ESP32 data: Learn sensor characteristics (dust/mq readings vs conditions)
     
-    The model learns how environmental conditions affect sensor accuracy.
+    The model learns calibration factors based on:
+    - Environmental conditions (temp, humidity affecting sensor accuracy)
+    - Raw sensor readings (dust, mq135, mq7)
+    - Time of day patterns
     """
     log.info("=" * 60)
     log.info("Training CALIBRATION MODEL")
     log.info("=" * 60)
     
-    df = cpcb_df.copy()
-    df = extract_time_features(df)
-    df = compute_pollutant_ratios(df)
+    # Prepare CPCB data (ground truth)
+    cpcb = cpcb_df.copy()
+    cpcb = extract_time_features(cpcb)
+    cpcb = compute_pollutant_ratios(cpcb)
+    cpcb["data_source"] = "cpcb"
     
-    # Features: environmental conditions + time
-    feature_cols = ["temp", "humidity", "hour", "month", "is_rush_hour"]
+    # Prepare ESP32 data
+    esp = pd.DataFrame()
+    if esp32_df is not None and not esp32_df.empty:
+        esp = esp32_df.copy()
+        esp = extract_time_features(esp)
+        esp["data_source"] = "esp32"
+        
+        # Map ESP32 columns to standard names
+        esp_col_map = {
+            "dust": "raw_dust",
+            "mq135": "raw_mq135", 
+            "mq7": "raw_mq7",
+            "temperature": "temp",
+            "humidity": "humidity",
+            "pressure": "pressure_hpa",
+            "gas": "gas_resistance",
+        }
+        for old, new in esp_col_map.items():
+            if old in esp.columns:
+                esp[new] = esp[old]
+        
+        # Estimate PM2.5 from dust sensor (linear approximation)
+        if "raw_dust" in esp.columns:
+            esp["pm25"] = esp["raw_dust"] * 1.5  # basic calibration factor
+        
+        log.info(f"ESP32 data: {len(esp)} rows with columns {list(esp.columns)}")
+    
+    # Combine datasets
+    if not esp.empty:
+        # Select common columns
+        common_cols = ["pm25", "temp", "humidity", "hour", "month", "is_rush_hour", "data_source"]
+        if "raw_dust" in esp.columns:
+            common_cols.append("raw_dust")
+        
+        cpcb_subset = cpcb[[c for c in common_cols if c in cpcb.columns]].copy()
+        esp_subset = esp[[c for c in common_cols if c in esp.columns]].copy()
+        
+        # Add raw_dust estimate for CPCB (reverse calibration for training)
+        if "pm25" in cpcb_subset.columns and "raw_dust" not in cpcb_subset.columns:
+            cpcb_subset["raw_dust"] = cpcb_subset["pm25"] / 1.5
+        
+        df = pd.concat([cpcb_subset, esp_subset], ignore_index=True)
+        log.info(f"Combined dataset: {len(df)} rows (CPCB + ESP32)")
+    else:
+        df = cpcb
+        # Add raw_dust estimate
+        if "pm25" in df.columns:
+            df["raw_dust"] = df["pm25"] / 1.5
+        log.info(f"Using CPCB data only: {len(df)} rows")
+    
+    # Features: raw sensors + environmental conditions + time
+    feature_cols = ["raw_dust", "temp", "humidity", "hour", "month", "is_rush_hour"]
     available_features = [c for c in feature_cols if c in df.columns]
     
     if len(available_features) < 3:
         log.warning("Not enough features for calibration model")
         return {}
     
-    # Target: PM2.5 (we'll predict calibration adjustment)
+    # Target: PM2.5 (calibrated value)
     if "pm25" not in df.columns:
         log.warning("No PM2.5 column for calibration target")
         return {}
@@ -609,7 +663,7 @@ def main():
     
     # Train models
     if not args.skip_calibration:
-        results["calibration"] = train_calibration_model(cpcb_df, output_dir)
+        results["calibration"] = train_calibration_model(cpcb_df, esp32_df, output_dir)
     
     if not args.skip_fp:
         results["false_positive"] = train_false_positive_model(cpcb_df, output_dir)

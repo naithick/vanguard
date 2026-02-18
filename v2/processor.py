@@ -382,9 +382,10 @@ class DataProcessor:
                 hour = ts.hour
                 is_rush = hour in [7, 8, 9, 17, 18, 19]
 
-                # 1. Calibrate PM2.5 based on environmental conditions
+                # 1. Calibrate PM2.5 based on raw dust + environmental conditions
                 pm25_calibrated = _xgb_predictor.calibrate_reading(
                     raw_pm25=pm25 or 0,
+                    raw_dust=raw.get("raw_dust"),  # pass raw dust sensor value
                     temp=temp or 30,
                     humidity=hum or 70,
                     hour=hour,

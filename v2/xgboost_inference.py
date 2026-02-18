@@ -181,6 +181,7 @@ class XGBoostPredictor:
     def calibrate_reading(
         self,
         raw_pm25: float,
+        raw_dust: float = None,
         temp: float = 30.0,
         humidity: float = 70.0,
         hour: int = 12,
@@ -193,6 +194,14 @@ class XGBoostPredictor:
         ESP32 dust sensors are affected by temperature and humidity.
         This model learns the correction factor from CPCB ground truth.
         
+        Parameters
+        ----------
+        raw_pm25 : float
+            Raw PM2.5 estimate (dust * 1.5)
+        raw_dust : float, optional
+            Raw dust sensor reading (if available, improves calibration)
+        temp, humidity, hour, month, is_rush_hour : environmental context
+        
         Returns
         -------
         float : Calibrated PM2.5 value in µg/m³
@@ -201,7 +210,11 @@ class XGBoostPredictor:
             log.debug("No calibration model loaded, returning raw value")
             return raw_pm25
         
+        # Use raw_dust if provided, otherwise estimate from pm25
+        dust_val = raw_dust if raw_dust is not None else (raw_pm25 / 1.5)
+        
         features = {
+            "raw_dust": dust_val,
             "temp": temp,
             "humidity": humidity,
             "hour": hour,
