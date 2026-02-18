@@ -13,7 +13,7 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
 
-  #map { width: 100%; height: 100vh; }
+  #map { width: 100%; height: 100vh; -webkit-transform: translateZ(0); transform: translateZ(0); }
 
   /* ── Control panel ──────────────────────────────────────── */
   .panel {
@@ -51,11 +51,18 @@
   }
   .toggle-group button:hover:not(.active) { background: #eee; }
 
-  /* ── Smooth circle shadows ───────────────────────────── */
+  /* ── Smooth rendering ──────────────────────────────────── */
   .leaflet-overlay-pane svg circle,
   .leaflet-overlay-pane svg path {
     filter: drop-shadow(0 0 3px rgba(0,0,0,.08));
   }
+  .leaflet-tile-pane    { will-change: transform; }
+  .leaflet-overlay-pane { will-change: transform; }
+  .leaflet-zoom-anim .leaflet-zoom-animated {
+    transition: transform 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
+  }
+  .leaflet-fade-anim .leaflet-popup { transition: opacity 0.2s linear; }
+  .leaflet-tile-container img { will-change: transform; image-rendering: auto; }
 
   /* ── Opacity slider ───────────────────────────────────── */
   input[type=range] {
@@ -253,7 +260,17 @@ const FIELD_SCALES = {
 };
 
 // ── Map init ─────────────────────────────────────────────────────────────────
-const map = L.map('map', { zoomControl: false }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+const map = L.map('map', {
+  zoomControl: false,
+  preferCanvas: true,
+  zoomSnap: 0.5,
+  zoomDelta: 0.5,
+  wheelDebounceTime: 80,
+  wheelPxPerZoomLevel: 120,
+  zoomAnimation: true,
+  fadeAnimation: true,
+  markerZoomAnimation: true,
+}).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
 
 L.control.zoom({ position: 'topright' }).addTo(map);
 
@@ -772,6 +789,8 @@ async function loadBubbles() {
     console.error('Bubble load error:', err);
   }
 }
+
+
 
 // ── Event listeners ──────────────────────────────────────────────────────────
 

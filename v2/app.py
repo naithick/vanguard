@@ -33,6 +33,7 @@ Auto-alerts: when AQI exceeds thresholds during processing.
 
 import os
 import sys
+import csv
 import logging
 import threading
 import time
