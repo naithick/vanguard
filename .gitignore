@@ -1,54 +1,38 @@
-# Python
-.venv/
+# Dependencies
+node_modules/
+venv/
 __pycache__/
 *.pyc
-*.pyo
-*.egg-info/
-dist/
-build/
-*.egg
 
 # Environment
 .env
-.env.local
+*.local
 
-# Node / React
-node_modules/
-green-path-ui/node_modules/
+# Build outputs
+dist/
+build/
+*.egg-info/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Build outputs
-pipeline/processed_data/
+# Logs
 *.log
+npm-debug.log*
 
-# Large files
-*.pdf
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
 
-# Reference repos (submodules)
-green-path-ui/
-hope-graph-builder/
-venv/
-
-# Data files (CPCB, CSV, Excel)
-*.xlsx
-*.csv
-*.xls
-
-# WhatsApp exports
-WhatsApp*/
-
-# Kimi agent (external tool output)
-Kimi_Agent_*/
-
-# Dump folder (legacy, reference data, old tests)
-dump/
+# Temp
+*.tmp
+*.bak
+.vite/
