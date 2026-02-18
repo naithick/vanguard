@@ -223,16 +223,11 @@ class XGBoostPredictor:
         }
         
         if self._use_xgboost and self._calibration_model is not None:
-            # Full XGBoost inference
+            # Full XGBoost inference - model directly predicts calibrated PM2.5
             feature_vec = [features.get(f, 0) for f in self._calibration_weights.feature_names]
             import numpy as np
-            predicted_pm25 = self._calibration_model.predict([feature_vec])[0]
-            
-            # Compute adjustment factor: predicted_reference / raw
-            # Apply as: calibrated = raw * (predicted / baseline)
-            baseline = 50.0  # average expected PM2.5
-            factor = predicted_pm25 / baseline if baseline > 0 else 1.0
-            calibrated = raw_pm25 * factor
+            # Model output IS the calibrated PM2.5 (trained on CPCB ground truth)
+            calibrated = float(self._calibration_model.predict([feature_vec])[0])
         else:
             # Lite mode: use feature-importance weighted adjustment
             calibrated = self._lite_calibrate(raw_pm25, features)

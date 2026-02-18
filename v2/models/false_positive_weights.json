@@ -1,0 +1,42 @@
+{
+  "feature_names": [
+    "pm25",
+    "co_ppm",
+    "no2",
+    "so2",
+    "ozone",
+    "pm10_pm25_ratio",
+    "no2_co_ratio",
+    "pm25_co_ratio",
+    "hour",
+    "is_rush_hour",
+    "is_weekend",
+    "is_night",
+    "humidity"
+  ],
+  "class_names": [
+    "industrial",
+    "kitchen",
+    "normal",
+    "sensor_fault",
+    "traffic"
+  ],
+  "feature_importance": {
+    "pm25": 0.011780000291764736,
+    "co_ppm": 0.018187640234827995,
+    "no2": 0.10484323650598526,
+    "so2": 0.0016257606912404299,
+    "ozone": 0.0007577616488561034,
+    "pm10_pm25_ratio": 0.0012080990709364414,
+    "no2_co_ratio": 0.0033032589126378298,
+    "pm25_co_ratio": 0.015224223956465721,
+    "hour": 0.010735083371400833,
+    "is_rush_hour": 0.8294479250907898,
+    "is_weekend": 0.0007521322113461792,
+    "is_night": 0.000672180438414216,
+    "humidity": 0.0014626806369051337
+  },
+  "accuracy": 0.9998773495231963,
+  "trained_at": "2026-02-18T15:25:32.023011",
+  "n_samples": 130451
+}
