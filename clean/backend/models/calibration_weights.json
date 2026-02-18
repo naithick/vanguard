@@ -1,0 +1,21 @@
+{
+  "feature_names": [
+    "raw_dust",
+    "humidity",
+    "hour",
+    "month",
+    "is_rush_hour"
+  ],
+  "feature_importance": {
+    "raw_dust": 0.6456636190414429,
+    "humidity": 0.06146169453859329,
+    "hour": 0.1991264969110489,
+    "month": 0.06367358565330505,
+    "is_rush_hour": 0.030074501410126686
+  },
+  "rmse": 9.631876574520737,
+  "n_estimators": 100,
+  "max_depth": 6,
+  "trained_at": "2026-02-18T15:25:28.346932",
+  "n_samples": 149384
+}

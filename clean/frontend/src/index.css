@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ===== WISE THEME BACKGROUND SYSTEM ===== */
+    --bg-main: #F0FDF4;
+    /* Light Mint Nature BG */
+    --bg-surface: #FFFFFF;
+    --bg-hover: #DCFCE7;
+    /* Nature Light */
+
+    /* ===== PRIMARY WISE SCALE (Foam -> Lime -> Sage -> Forest) ===== */
+    --primary-100: #F0FDF4;
+    /* Mint */
+    --primary-200: #DCFCE7;
+    /* Mint Hover */
+    --primary-300: #86EFAC;
+    /* Light Green */
+    --primary-400: #22C55E;
+    /* Fern (Standard Green) */
+    --primary-500: #14B8A6;
+    /* Teal (Variation) */
+    --primary-600: #163300;
+    /* Forest (Text/Dark) */
+    --primary-700: #0D2000;
+    /* Darker Forest */
+    --primary-800: #050D00;
+    /* Deepest Forest */
+
+    /* ===== TEXT SYSTEM ===== */
+    --text-main: #163300;
+    /* Forest */
+    --text-secondary: #14B8A6;
+    /* Teal for subtext? Or stick to Sage #5F6F62? Let's use Forest/Teal mix */
+    --text-light: #5F6F62;
+    /* Sage */
+
+    /* ===== BORDER SYSTEM ===== */
+    --border-light: #DCFCE7;
+    /* Mint Light */
+    --border-medium: #86EFAC;
+    /* Light Green */
+
+    /* ===== CHART SYSTEM (VARIED GREENS + ACCENTS) ===== */
+    --chart-1: #22C55E;
+    /* Fern */
+    --chart-2: #14B8A6;
+    /* Teal */
+    --chart-3: #9FE870;
+    /* Wise Lime */
+    --chart-4: #FACC15;
+    /* Sun (Yellow) */
+    --chart-5: #D97706;
+    /* Earth (Amber) */
+    --chart-grid: #DCFCE7;
+    --chart-bg: #FFFFFF;
+
+    /* ===== STATUS SYSTEM (WISE THEMED) ===== */
+    --status-good: #22C55E;
+    /* Fern */
+    --status-warning: #E8C670;
+    /* Yellow-Lime? or stick to Amber */
+    --status-critical: #E87070;
+    /* Red-Lime? or stick to Red */
+
+    /* Semantic Aliases for Quick Transition */
+    --primary-green: var(--primary-600);
+    --secondary-green: var(--primary-400);
+    --eco-background: var(--bg-main);
+    --sky-blue: var(--primary-300);
+
+    /* Legacy mapping for consistency while refactoring */
+    --success: var(--status-good);
+    --warning: var(--status-warning);
+    --error: var(--status-critical);
+
+    /* Shadcn/UI Mappings for Compatibility */
+    --background: var(--bg-main);
+    --foreground: var(--text-main);
+    --card: var(--bg-surface);
+    --card-foreground: var(--text-main);
+    --primary: var(--primary-600);
+    --primary-foreground: #FFFFFF;
+    --secondary: var(--primary-100);
+    --secondary-foreground: var(--primary-700);
+    --muted: var(--bg-hover);
+    --muted-foreground: var(--text-secondary);
+    --accent: var(--primary-100);
+    --accent-foreground: var(--primary-700);
+    --destructive: #E87070;
+    --destructive-foreground: #FFFFFF;
+    --border: var(--border-light);
+    --input: var(--border-medium);
+    --ring: #22C55E;
+    --radius: 0.75rem;
+
+    /* Chart Mapping for Components */
+    --chart-green: var(--chart-1);
+    --chart-blue: var(--chart-2);
+    --chart-green-light: var(--chart-3);
+    --chart-brown: var(--chart-4);
+    --chart-green-dark: var(--chart-5);
+
+    /* Pie Mapping for Components */
+    --pie-1: var(--chart-1);
+    --pie-2: var(--chart-2);
+    --pie-3: var(--chart-3);
+    --pie-4: var(--chart-4);
+    --pie-5: var(--chart-5);
+    /* Reuse or use different shade */
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 189 94% 43%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 189 94% 43%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
