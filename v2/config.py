@@ -32,9 +32,9 @@ class DeviceDefaults:
     dust_calibration: float = 1.0
     mq135_calibration: float = 1.0
     mq7_calibration: float = 1.0
-    # Fallback GPS (Bangalore centre)
-    default_latitude: float = 12.9716
-    default_longitude: float = 77.5946
+    # Fallback GPS (Chennai centre)
+    default_latitude: float = 13.0500
+    default_longitude: float = 80.2300
 
 
 @dataclass
