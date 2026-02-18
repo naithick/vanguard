@@ -7,9 +7,9 @@ interface PollutantLevelsProps {
 }
 
 const PollutantLevels = ({ readings = [] }: PollutantLevelsProps) => {
-  // Show PM2.5, CO2, and CO for the last 15 readings
-  const data = readings.slice(0, 15).reverse().map(r => ({
-    time: new Date(r.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+  // Show PM2.5 and CO2 for the last 8 readings (cleaner look)
+  const data = readings.slice(0, 8).reverse().map(r => ({
+    time: new Date(r.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     pm25: r.pm25_ugm3,
     co2: r.co2_ppm / 10, // Scaled for visual comparison
     co: r.co_ppm,
@@ -37,13 +37,13 @@ const PollutantLevels = ({ readings = [] }: PollutantLevelsProps) => {
 
       <div className="flex-1 min-h-[140px]">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data}>
+          <BarChart data={data} barGap={4}>
             <XAxis
               dataKey="time"
               axisLine={false}
               tickLine={false}
-              tick={{ fontSize: 8, fill: '#94a3b8' }}
-              interval={2}
+              tick={{ fontSize: 9, fill: '#94a3b8' }}
+              interval={0}
             />
             <Tooltip
               contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.1)', fontSize: '11px' }}
@@ -52,8 +52,8 @@ const PollutantLevels = ({ readings = [] }: PollutantLevelsProps) => {
             <Bar
               dataKey="pm25"
               name="PM2.5 (µg/m³)"
-              radius={[2, 2, 0, 0]}
-              barSize={10}
+              radius={[4, 4, 0, 0]}
+              barSize={18}
             >
               {data.map((entry, index) => (
                 <Cell key={`pm25-${index}`} fill={getBarColor(entry.pm25)} />
@@ -63,8 +63,8 @@ const PollutantLevels = ({ readings = [] }: PollutantLevelsProps) => {
               dataKey="co2"
               name="CO₂ (Scaled)"
               fill="#D97706"
-              radius={[2, 2, 0, 0]}
-              barSize={6}
+              radius={[4, 4, 0, 0]}
+              barSize={12}
             />
           </BarChart>
         </ResponsiveContainer>
