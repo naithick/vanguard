@@ -26,7 +26,7 @@ log = logging.getLogger("greenroute.processor")
 # ── Sensor bounds (physically plausible ranges) ──────────────────────────────
 # Values outside these indicate hardware error or noise.
 SENSOR_BOUNDS = {
-    "raw_dust":        (0,    500),    # allow 0 for indoor/ESP32 demo
+    "raw_dust":        (1,    500),    # 0 = no-read, >500 = malfunction
     "raw_mq135":       (0,    4095),   # ESP32 12-bit ADC (0 OK — sensor optional)
     "raw_mq7":         (0,    4095),   # ESP32 12-bit ADC (0 OK — sensor optional)
     "temperature_c":   (-10,  60),     # BME680 operational (realistic outdoor)

@@ -1,7 +1,6 @@
 """
 GreenRoute Mesh v2 — API Server
 
-POST /data           — ESP32 lightweight alias (no device_id needed, GPS 0,0 handled)
 POST /api/ingest    — ESP32 sends raw sensor JSON → stored + processed in real-time
 POST /api/process   — manually trigger processing of any missed rows
 GET  /api/readings  — latest processed readings
@@ -72,43 +71,34 @@ def index():
 
 
 # =============================================================================
-#  POST /data  — ESP32 lightweight alias (no device_id required)
+#  POST /api/ingest  — ESP32 raw data → Supabase raw_telemetry
 # =============================================================================
-@app.route("/data", methods=["POST"])
-def esp32_data():
+@app.route("/api/ingest", methods=["POST"])
+def ingest():
     """
-    Lightweight endpoint for ESP32 nodes that don't send a device_id.
-    Accepts the same sensor fields and forwards to the main ingest logic.
-    Auto-assigns device_id from ?id= query param or defaults to 'esp32-live-001'.
+    Receive a JSON payload from the ESP32 and write it straight into
+    the raw_telemetry table.  The background processor will pick it up
+    on the next 25-second cycle.
+
+    Expected JSON:
+    {
+        "device_id":   "esp32-001",
+        "dust":        45.0,
+        "mq135":       890.0,
+        "mq7":         580.0,
+        "temperature": 28.5,
+        "humidity":    65.0,
+        "pressure":    1013.25,
+        "gas":         50000.0,
+        "latitude":    12.9716,
+        "longitude":   77.5946
+    }
     """
     data = request.get_json(silent=True)
+
     if not data:
         return jsonify({"error": "No JSON payload"}), 400
 
-    # ESP32 may send device_id as query param (?id=esp32-003) or not at all
-    device_id = (
-        data.get("device_id")
-        or request.args.get("id")
-        or "esp32-live-001"
-    )
-    data["device_id"] = device_id
-
-    # Handle GPS (0,0) — treat as "no fix" so processor uses fallback
-    lat = data.get("latitude", 0)
-    lon = data.get("longitude", 0)
-    if lat == 0 and lon == 0:
-        data.pop("latitude", None)
-        data.pop("longitude", None)
-
-    # Forward to standard ingest
-    return _do_ingest(data)
-
-
-# =============================================================================
-#  Shared ingest logic (used by /api/ingest and /data)
-# =============================================================================
-def _do_ingest(data: dict):
-    """Core ingest: register device → store raw → process → auto-alert."""
     device_id = data.get("device_id")
     if not device_id:
         return jsonify({"error": "Missing device_id"}), 400
@@ -128,15 +118,17 @@ def _do_ingest(data: dict):
         log.info(f"Ingested raw telemetry from {device_id}  (id={telemetry_id})")
 
         # ── REAL-TIME PROCESSING ──────────────────────────────────────
+        # Process immediately — no waiting for background worker.
         processed_row = None
         process_status = "skipped"
         try:
+            # Attach device info so processor doesn't need a second query
             row["devices"] = device
             enriched = processor.process(row, device)
 
             if enriched is None:
                 db.mark_telemetry_processed(telemetry_id)
-                process_status = "dropped"
+                process_status = "dropped"  # failed validation
                 log.info(f"Row {telemetry_id} dropped by validator")
             else:
                 processed_row = db.insert_processed_data(enriched)
@@ -147,11 +139,13 @@ def _do_ingest(data: dict):
                     f"PM2.5={enriched.get('pm25_ugm3')}, "
                     f"AQI={enriched.get('aqi_value')}"
                 )
+                # Auto-alert if AQI is high
                 try:
                     check_and_create_alert(enriched, device)
                 except Exception as alert_exc:
                     log.warning(f"Auto-alert check failed: {alert_exc}")
         except Exception as proc_exc:
+            # Processing failed — background worker will retry
             process_status = "deferred"
             log.warning(f"Real-time processing failed, deferred: {proc_exc}")
 
@@ -166,21 +160,6 @@ def _do_ingest(data: dict):
     except Exception as exc:
         log.error(f"Ingest error: {exc}")
         return jsonify({"error": str(exc)}), 500
-
-
-# =============================================================================
-#  POST /api/ingest  — ESP32 raw data → Supabase raw_telemetry
-# =============================================================================
-@app.route("/api/ingest", methods=["POST"])
-def ingest():
-    """
-    Receive a JSON payload from the ESP32 and write it straight into
-    the raw_telemetry table.  Requires device_id in the JSON body.
-    """
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"error": "No JSON payload"}), 400
-    return _do_ingest(data)
 
 
 # =============================================================================
