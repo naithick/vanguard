@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, ImageOverlay, GeoJSON, CircleMarker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, ImageOverlay, GeoJSON, CircleMarker, Popup, Polyline } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -131,8 +131,10 @@ const MapView = () => {
     // New Layers State
     const [devices, setDevices] = useState<any[]>([]);
     const [hotspots, setHotspots] = useState<any[]>([]);
+    const [routeData, setRouteData] = useState<any[]>([]);
     const [showDevices, setShowDevices] = useState(true);
     const [showHotspots, setShowHotspots] = useState(true);
+    const [showRoute, setShowRoute] = useState(true);
 
     // Fetch Data
     useEffect(() => {
@@ -165,9 +167,22 @@ const MapView = () => {
             }
         };
 
+        const loadRoute = async () => {
+            try {
+                const resp = await fetch(`${API_BASE}/api/route`);
+                const json = await resp.json();
+                if (json.ok) {
+                    setRouteData(json.data);
+                }
+            } catch (err) {
+                console.error("Failed to fetch route", err);
+            }
+        };
+
         const debounce = setTimeout(() => {
             loadZones();
             loadOverlays();
+            loadRoute();
         }, 500);
 
         // Poll for updates every 30s
@@ -319,6 +334,15 @@ const MapView = () => {
                                 />
                                 <span className="text-sm text-gray-700">Show Hotspots</span>
                             </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={showRoute}
+                                    onChange={(e) => setShowRoute(e.target.checked)}
+                                    className="accent-blue-500 w-4 h-4 rounded border-gray-300"
+                                />
+                                <span className="text-sm text-gray-700">Show Sample Route</span>
+                            </label>
                         </div>
                     </div>
 
@@ -410,6 +434,54 @@ const MapView = () => {
                             ) : (
                                 <div className="text-xs mt-1 text-gray-500">No recent data</div>
                             )}
+                        </Popup>
+                    </CircleMarker>
+                ))}
+
+                {/* Route Layer - Color-coded polyline segments */}
+                {showRoute && routeData.length > 1 && routeData.slice(0, -1).map((point, i) => {
+                    const nextPoint = routeData[i + 1];
+                    return (
+                        <Polyline
+                            key={`route-${i}`}
+                            positions={[
+                                [point.lat, point.lon],
+                                [nextPoint.lat, nextPoint.lon]
+                            ]}
+                            pathOptions={{
+                                color: aqiColor(point.aqi),
+                                weight: 5,
+                                opacity: 0.8,
+                                lineCap: 'round',
+                                lineJoin: 'round'
+                            }}
+                        />
+                    );
+                })}
+
+                {/* Route Points with Popups */}
+                {showRoute && routeData.map((point, i) => (
+                    <CircleMarker
+                        key={`route-point-${i}`}
+                        center={[point.lat, point.lon]}
+                        radius={4}
+                        pathOptions={{
+                            fillColor: aqiColor(point.aqi),
+                            fillOpacity: 1,
+                            color: '#fff',
+                            weight: 1,
+                            opacity: 1
+                        }}
+                    >
+                        <Popup>
+                            <div className="text-xs">
+                                <strong>Route Point #{i + 1}</strong><br />
+                                AQI: <span style={{ color: aqiColor(point.aqi) }}><strong>{point.aqi}</strong></span><br />
+                                PM2.5: {point.pm25} µg/m³<br />
+                                Temp: {point.temperature}°C<br />
+                                Humidity: {point.humidity}%<br />
+                                <span className="text-gray-400">{point.timestamp}</span>
+                            </div>
                         </Popup>
                     </CircleMarker>
                 ))}

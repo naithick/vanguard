@@ -408,6 +408,82 @@ def get_monthly_history():
 
 
 # =============================================================================
+#  GET /api/route — Sample route data with air quality readings
+# =============================================================================
+@app.route("/api/route", methods=["GET"])
+def get_route():
+    """
+    Get sample route data from CSV file for map visualization.
+    Returns array of points with lat, lon, dust, aqi, temperature, humidity.
+    """
+    import math
+    
+    csv_path = os.path.join(os.path.dirname(__file__), "..", "Sample_Data_with_location .csv")
+    
+    if not os.path.exists(csv_path):
+        return jsonify({"error": "Sample CSV not found"}), 404
+    
+    points = []
+    try:
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+            prev_lat, prev_lon = None, None
+            
+            for row in reader:
+                lat = float(row.get("latitude", 0))
+                lon = float(row.get("longitude", 0))
+                dust = float(row.get("dust", 0))
+                temp = float(row.get("temperature", 0))
+                humidity = float(row.get("humidity", 0))
+                
+                # Skip duplicate consecutive points
+                if prev_lat == lat and prev_lon == lon:
+                    continue
+                prev_lat, prev_lon = lat, lon
+                
+                # Calculate PM2.5 estimate (dust * 1.5)
+                pm25 = dust * 1.5
+                
+                # Calculate AQI from PM2.5
+                def pm25_to_aqi(pm):
+                    breakpoints = [
+                        (0, 12.0, 0, 50),
+                        (12.1, 35.4, 51, 100),
+                        (35.5, 55.4, 101, 150),
+                        (55.5, 150.4, 151, 200),
+                        (150.5, 250.4, 201, 300),
+                        (250.5, 500.4, 301, 500),
+                    ]
+                    for c_lo, c_hi, i_lo, i_hi in breakpoints:
+                        if c_lo <= pm <= c_hi:
+                            return round(((i_hi - i_lo) / (c_hi - c_lo)) * (pm - c_lo) + i_lo)
+                    return 500
+                
+                aqi = pm25_to_aqi(pm25)
+                
+                points.append({
+                    "lat": lat,
+                    "lon": lon,
+                    "dust": dust,
+                    "pm25": round(pm25, 2),
+                    "aqi": aqi,
+                    "temperature": temp,
+                    "humidity": humidity,
+                    "timestamp": row.get("timestamp", "")
+                })
+        
+        return jsonify({
+            "ok": True,
+            "data": points,
+            "count": len(points)
+        })
+        
+    except Exception as exc:
+        log.error(f"Route data error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+# =============================================================================
 #  DASHBOARD ENDPOINTS
 # =============================================================================
 
