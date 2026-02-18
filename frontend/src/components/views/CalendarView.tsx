@@ -193,7 +193,10 @@ const CalendarView = () => {
                         </div>
                     ) : (
                         <div className="grid grid-cols-7 gap-4 flex-1 overflow-y-auto">
-                            {/* Empty slots for start of month padding could be added here if we had day-of-week info */}
+                            {/* Empty slots for start of month padding */}
+                            {Array.from({ length: new Date(currentYear, currentMonth, 1).getDay() }).map((_, i) => (
+                                <div key={`empty-${i}`} className="rounded-2xl p-3" />
+                            ))}
                             {calendarData.map(date => (
                                 <div
                                     key={date.day}

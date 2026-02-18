@@ -68,8 +68,11 @@ module.exports = {
         // Unified status colors (Blue Gradient)
         status: {
           success: "var(--status-good)",
+          good: "var(--status-good)",
           warning: "var(--status-warning)",
+          moderate: "var(--status-warning)",
           error: "var(--status-critical)",
+          critical: "var(--status-critical)",
           info: "var(--primary-400)",
         },
         // Chart Palette

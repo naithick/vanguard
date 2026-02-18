@@ -1,4 +1,3 @@
-import { Wifi, Signal, Battery } from 'lucide-react';
 import type { Reading } from '../api/client';
 
 interface SensorDetailsProps {
@@ -36,24 +35,6 @@ const SensorDetails = ({ reading }: SensorDetailsProps) => {
             </span>
           </div>
         ))}
-      </div>
-
-      {/* Connection Status */}
-      <div className="mt-5 pt-4 border-t border-gray-100">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Wifi className="w-4 h-4 text-primary-600" />
-            <span className="text-xs text-gray-600">Connected</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Signal className="w-4 h-4 text-primary-600" />
-            <span className="text-xs text-gray-600">{reading?.rssi ? `${reading.rssi} dBm` : '-45 dBm'}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Battery className="w-4 h-4 text-primary-600" />
-            <span className="text-xs text-gray-600">{reading?.battery_level ? `${reading.battery_level}%` : '87%'}</span>
-          </div>
-        </div>
       </div>
     </div>
   );
