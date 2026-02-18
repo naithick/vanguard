@@ -93,6 +93,71 @@
     display: none;
   }
   .loading.show { display: block; }
+
+  /* ── Layer checkboxes ──────────────────────────────────── */
+  .layer-toggles {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee;
+  }
+  .layer-toggles label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 500; color: #444;
+    cursor: pointer; margin: 5px 0; text-transform: none; letter-spacing: 0;
+  }
+  .layer-toggles input[type=checkbox] {
+    accent-color: #4CAF50; width: 14px; height: 14px;
+  }
+
+  /* ── Refresh indicator ────────────────────────────────── */
+  .refresh-bar {
+    margin-top: 8px; font-size: 10px; color: #aaa;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .refresh-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: #4CAF50;
+    animation: pulse-dot 2s infinite;
+  }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .3; }
+  }
+
+  /* ── Hotspot pulse ring (CSS marker) ──────────────────── */
+  .hotspot-pulse {
+    width: 24px; height: 24px; position: relative;
+  }
+  .hotspot-pulse::before {
+    content: ''; position: absolute; inset: -6px;
+    border-radius: 50%; border: 2px solid;
+    animation: hs-ring 1.8s ease-out infinite;
+  }
+  .hotspot-pulse.moderate { background: #ff7e00; }
+  .hotspot-pulse.moderate::before { border-color: #ff7e00; }
+  .hotspot-pulse.severe { background: #ff0000; }
+  .hotspot-pulse.severe::before { border-color: #ff0000; }
+  .hotspot-pulse.critical { background: #7e0023; }
+  .hotspot-pulse.critical::before { border-color: #7e0023; }
+  @keyframes hs-ring {
+    0% { transform: scale(.8); opacity: .8; }
+    100% { transform: scale(2.2); opacity: 0; }
+  }
+
+  /* ── Device popup ──────────────────────────────────────── */
+  .device-popup { font-size: 12px; line-height: 1.6; }
+  .device-popup .dp-name { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+  .device-popup .dp-row { display: flex; justify-content: space-between; gap: 12px; }
+  .device-popup .dp-label { color: #888; }
+  .device-popup .dp-val { font-weight: 600; }
+  .device-popup .dp-aqi {
+    display: inline-block; padding: 1px 8px; border-radius: 4px;
+    color: #fff; font-weight: 700; font-size: 11px;
+  }
+
+  /* ── Hotspot popup ─────────────────────────────────────── */
+  .hs-popup { font-size: 12px; line-height: 1.6; }
+  .hs-popup .hs-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; color: #d32f2f; }
+  .hs-popup .hs-row { display: flex; justify-content: space-between; gap: 12px; }
+  .hs-popup .hs-label { color: #888; }
+  .hs-popup .hs-val { font-weight: 600; }
 </style>
 </head>
 <body>
@@ -135,6 +200,17 @@
 
   <div class="stats" id="stats">
     Loading data…
+  </div>
+
+  <div class="layer-toggles">
+    <label><input type="checkbox" id="layerDevices" checked> Devices</label>
+    <label><input type="checkbox" id="layerHotspots" checked> Hotspots</label>
+    <label><input type="checkbox" id="layerZones" checked> Zone overlay</label>
+  </div>
+
+  <div class="refresh-bar">
+    <div class="refresh-dot"></div>
+    <span id="refreshStatus">Auto-refresh: 60 s</span>
   </div>
 </div>
 
@@ -184,6 +260,11 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
 let zoneLayer = null;
 let pointLayer = null;
 let imageOverlay = null;  // smooth canvas heatmap
+let deviceLayer = null;   // device markers
+let hotspotLayer = null;  // hotspot circles + pulse markers
+let refreshTimer = null;
+const REFRESH_INTERVAL = 60;  // seconds
+let _refreshCountdown = REFRESH_INTERVAL;
 
 // ── State ────────────────────────────────────────────────────────────────────
 let currentMode = 'heatmap';
@@ -198,6 +279,10 @@ const $resolution = document.getElementById('resolution');
 const $stats = document.getElementById('stats');
 const $loading = document.getElementById('loading');
 const $legend = document.getElementById('legend');
+const $layerDevices = document.getElementById('layerDevices');
+const $layerHotspots = document.getElementById('layerHotspots');
+const $layerZones = document.getElementById('layerZones');
+const $refreshStatus = document.getElementById('refreshStatus');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -508,8 +593,197 @@ document.querySelectorAll('#modeToggle button').forEach(btn => {
 });
 
 // ── Initial load ─────────────────────────────────────────────────────────────
+
+// ── Device markers ───────────────────────────────────────────────────────────
+
+function deviceAqiColor(aqi) {
+  if (aqi == null) return '#888';
+  if (aqi <= 50)  return '#00e400';
+  if (aqi <= 100) return '#ffff00';
+  if (aqi <= 150) return '#ff7e00';
+  if (aqi <= 200) return '#ff0000';
+  if (aqi <= 300) return '#8f3f97';
+  return '#7e0023';
+}
+
+async function loadDevices() {
+  if (!$layerDevices.checked) {
+    if (deviceLayer) { map.removeLayer(deviceLayer); deviceLayer = null; }
+    return;
+  }
+  try {
+    const resp = await fetch(`${API_BASE}/api/devices`);
+    const json = await resp.json();
+    if (!json.ok) return;
+
+    if (deviceLayer) { map.removeLayer(deviceLayer); deviceLayer = null; }
+    deviceLayer = L.layerGroup();
+
+    for (const d of json.devices) {
+      const dev = d.device || {};
+      const rd  = d.latest_reading || {};
+      const lat = rd.latitude || dev.static_latitude;
+      const lon = rd.longitude || dev.static_longitude;
+      if (!lat || !lon) continue;
+
+      const aqi  = rd.aqi_value;
+      const cat  = rd.aqi_category || '—';
+      const name = dev.name || dev.device_id;
+      const color = deviceAqiColor(aqi);
+
+      const marker = L.circleMarker([lat, lon], {
+        radius: 10,
+        fillColor: color,
+        fillOpacity: 0.9,
+        color: '#fff',
+        weight: 2.5,
+        opacity: 1,
+      });
+
+      marker.bindPopup(`
+        <div class="device-popup">
+          <div class="dp-name">${name}</div>
+          <div class="dp-row"><span class="dp-label">Device ID</span><span class="dp-val">${dev.device_id}</span></div>
+          ${aqi != null ? `<div class="dp-row"><span class="dp-label">AQI</span><span class="dp-aqi" style="background:${color}">${aqi} ${cat}</span></div>` : ''}
+          ${rd.pm25_ugm3 != null ? `<div class="dp-row"><span class="dp-label">PM2.5</span><span class="dp-val">${rd.pm25_ugm3} µg/m³</span></div>` : ''}
+          ${rd.temperature_c != null ? `<div class="dp-row"><span class="dp-label">Temp</span><span class="dp-val">${rd.temperature_c}°C</span></div>` : ''}
+          ${rd.humidity_pct != null ? `<div class="dp-row"><span class="dp-label">Humidity</span><span class="dp-val">${rd.humidity_pct}%</span></div>` : ''}
+          ${rd.co_ppm != null ? `<div class="dp-row"><span class="dp-label">CO</span><span class="dp-val">${rd.co_ppm} ppm</span></div>` : ''}
+          ${rd.heat_index_c != null ? `<div class="dp-row"><span class="dp-label">Heat Index</span><span class="dp-val">${rd.heat_index_c}°C</span></div>` : ''}
+          ${rd.respiratory_risk_label ? `<div class="dp-row"><span class="dp-label">Risk</span><span class="dp-val">${rd.respiratory_risk_label}</span></div>` : ''}
+          <div class="dp-row"><span class="dp-label">Status</span><span class="dp-val">${dev.status || '—'}</span></div>
+        </div>
+      `, { maxWidth: 280 });
+
+      // Tooltip on hover
+      marker.bindTooltip(name, { direction: 'top', offset: [0, -10], className: 'device-tooltip' });
+
+      marker.addTo(deviceLayer);
+    }
+    deviceLayer.addTo(map);
+  } catch (err) {
+    console.error('Device load error:', err);
+  }
+}
+
+// ── Hotspot overlays ─────────────────────────────────────────────────────────
+
+function hotspotColor(severity) {
+  switch ((severity || '').toLowerCase()) {
+    case 'critical': return '#7e0023';
+    case 'severe':   return '#ff0000';
+    default:         return '#ff7e00'; // moderate
+  }
+}
+
+async function loadHotspots() {
+  if (!$layerHotspots.checked) {
+    if (hotspotLayer) { map.removeLayer(hotspotLayer); hotspotLayer = null; }
+    return;
+  }
+  try {
+    const resp = await fetch(`${API_BASE}/api/hotspots/active`);
+    const json = await resp.json();
+    if (!json.ok) return;
+
+    if (hotspotLayer) { map.removeLayer(hotspotLayer); hotspotLayer = null; }
+    hotspotLayer = L.layerGroup();
+
+    for (const h of json.hotspots) {
+      if (!h.latitude || !h.longitude) continue;
+      const color = hotspotColor(h.severity_level);
+      const radiusM = h.radius_m || 500;
+
+      // Translucent influence circle
+      const circle = L.circle([h.latitude, h.longitude], {
+        radius: radiusM,
+        color: color,
+        weight: 2,
+        opacity: 0.6,
+        fillColor: color,
+        fillOpacity: 0.15,
+        dashArray: '6 4',
+      });
+
+      // Pulsing center marker
+      const sevClass = (h.severity_level || 'moderate').toLowerCase();
+      const pulseIcon = L.divIcon({
+        className: '',
+        html: `<div class="hotspot-pulse ${sevClass}" style="border-radius:50%;width:18px;height:18px;"></div>`,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
+      });
+      const centerMarker = L.marker([h.latitude, h.longitude], { icon: pulseIcon });
+
+      const popupHtml = `
+        <div class="hs-popup">
+          <div class="hs-title">⚠ Hotspot — ${h.severity_level || 'unknown'}</div>
+          <div class="hs-row"><span class="hs-label">Pollutant</span><span class="hs-val">${h.primary_pollutant}</span></div>
+          <div class="hs-row"><span class="hs-label">Peak AQI</span><span class="hs-val">${h.peak_aqi}</span></div>
+          <div class="hs-row"><span class="hs-label">Peak Value</span><span class="hs-val">${h.peak_value} µg/m³</span></div>
+          <div class="hs-row"><span class="hs-label">Readings</span><span class="hs-val">${h.contributing_readings}</span></div>
+          <div class="hs-row"><span class="hs-label">Radius</span><span class="hs-val">${radiusM} m</span></div>
+          ${h.location ? `<div class="hs-row"><span class="hs-label">Location</span><span class="hs-val">${h.location}</span></div>` : ''}
+          <div class="hs-row"><span class="hs-label">First detected</span><span class="hs-val">${(h.first_detected_at || '').slice(0, 16)}</span></div>
+        </div>
+      `;
+      circle.bindPopup(popupHtml, { maxWidth: 280 });
+      centerMarker.bindPopup(popupHtml, { maxWidth: 280 });
+
+      circle.addTo(hotspotLayer);
+      centerMarker.addTo(hotspotLayer);
+    }
+    hotspotLayer.addTo(map);
+  } catch (err) {
+    console.error('Hotspot load error:', err);
+  }
+}
+
+// ── Zone layer toggle ────────────────────────────────────────────────────────
+
+function clearZoneLayers() {
+  if (zoneLayer)    { map.removeLayer(zoneLayer);    zoneLayer = null; }
+  if (pointLayer)   { map.removeLayer(pointLayer);   pointLayer = null; }
+  if (imageOverlay) { map.removeLayer(imageOverlay); imageOverlay = null; }
+}
+
+// ── Master refresh ───────────────────────────────────────────────────────────
+
+async function refreshAll() {
+  await Promise.all([
+    $layerZones.checked ? loadZones() : Promise.resolve(clearZoneLayers()),
+    loadDevices(),
+    loadHotspots(),
+  ]);
+  _refreshCountdown = REFRESH_INTERVAL;
+}
+
+// ── Auto-refresh countdown ──────────────────────────────────────────────────
+
+function startAutoRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  _refreshCountdown = REFRESH_INTERVAL;
+  refreshTimer = setInterval(() => {
+    _refreshCountdown--;
+    $refreshStatus.textContent = `Auto-refresh: ${_refreshCountdown}s`;
+    if (_refreshCountdown <= 0) {
+      refreshAll();
+    }
+  }, 1000);
+}
+
+// ── Layer toggle listeners ──────────────────────────────────────────────────
+
+$layerDevices.addEventListener('change', loadDevices);
+$layerHotspots.addEventListener('change', loadHotspots);
+$layerZones.addEventListener('change', () => {
+  if ($layerZones.checked) loadZones();
+  else clearZoneLayers();
+});
+
 updateLegend(currentField);
-loadZones();
+refreshAll();
+startAutoRefresh();
 </script>
 </body>
 </html>
