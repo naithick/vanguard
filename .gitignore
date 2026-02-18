@@ -49,3 +49,6 @@ WhatsApp*/
 
 # Kimi agent (external tool output)
 Kimi_Agent_*/
+
+# Dump folder (legacy, reference data, old tests)
+dump/

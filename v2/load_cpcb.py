@@ -85,7 +85,7 @@ ALANDUR_META = {
     "lon": 80.2006,
 }
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dump")
 
 
 # ── AQI calculation (reuse from processor logic) ─────────────────────────────

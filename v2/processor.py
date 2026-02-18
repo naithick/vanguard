@@ -40,6 +40,15 @@ IQR_MULTIPLIER = 1.5
 ROLLING_WINDOW = 50  # keep last N values for IQR calculation
 
 
+# ── Default fallbacks for weather fields (Chennai climatological norms) ────
+WEATHER_DEFAULTS = {
+    "temperature_c":  30.0,    # Chennai annual avg ~30°C
+    "humidity_pct":   70.0,    # Chennai annual avg ~70% RH
+    "pressure_hpa":   1010.0,  # sea-level norm
+    "gas_resistance": 50000,   # neutral BME680 reading
+}
+
+
 class DataProcessor:
     """Stateless-ish processor (caches GPS + rolling stats per device)."""
 
@@ -48,6 +57,9 @@ class DataProcessor:
 
     # rolling sensor history per (device_id, field) for IQR outlier detection
     _history: Dict[str, deque] = {}
+
+    # per-device running medians for weather imputation (v1 port)
+    _medians: Dict[str, List[float]] = {}
 
     # ─────────────────────────────────────────────────────────────────────
     # 0. DATA VALIDATION
@@ -297,6 +309,35 @@ class DataProcessor:
         hum  = raw.get("humidity_pct")
         pres = raw.get("pressure_hpa")
         gas  = raw.get("gas_resistance")
+
+        # ── IMPUTATION (v1 port): fill NULL weather fields ────────────
+        # Strategy: use per-device running median if available,
+        # otherwise fall back to Chennai climatological defaults.
+        device_id = raw["device_id"]
+        for field, default in WEATHER_DEFAULTS.items():
+            val = locals().get({"temperature_c": "temp", "humidity_pct": "hum",
+                                "pressure_hpa": "pres", "gas_resistance": "gas"}[field])
+            med_key = f"{device_id}:{field}"
+            if val is not None:
+                # Track for future imputation
+                if med_key not in self._medians:
+                    self._medians[med_key] = []
+                buf = self._medians[med_key]
+                buf.append(val)
+                if len(buf) > ROLLING_WINDOW:
+                    buf.pop(0)
+            else:
+                # Impute: prefer device median, fall back to default
+                if med_key in self._medians and self._medians[med_key]:
+                    s = sorted(self._medians[med_key])
+                    imputed = s[len(s) // 2]
+                else:
+                    imputed = default
+                if field == "temperature_c":  temp = imputed
+                elif field == "humidity_pct": hum  = imputed
+                elif field == "pressure_hpa": pres = imputed
+                elif field == "gas_resistance": gas = imputed
+                log.debug(f"Imputed {field} for {device_id}: {imputed}")
 
         # GPS fallback
         rlat = raw.get("raw_latitude", 0) or 0

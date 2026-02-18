@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from supabase_client import db
 from processor import processor
 from zones import zone_builder
+from hotspots import detect_hotspots, get_hotspot_summary, get_all_hotspots, get_hotspot
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -653,6 +654,70 @@ def zones():
 
 
 # =============================================================================
+#  HOTSPOT ENDPOINTS
+# =============================================================================
+
+HOTSPOT_DETECT_INTERVAL = 5  # run hotspot detection every N background cycles
+_bg_cycle_count = 0
+
+
+@app.route("/api/hotspots", methods=["GET"])
+def list_hotspots():
+    """
+    List hotspots.
+    Query params: include_resolved (bool), limit (default 50)
+    """
+    try:
+        include_resolved = request.args.get("include_resolved", "").lower() in ("true", "1", "yes")
+        limit = request.args.get("limit", 50, type=int)
+        hotspots = get_all_hotspots(db, include_resolved=include_resolved, limit=limit)
+        return jsonify({"ok": True, "hotspots": hotspots, "count": len(hotspots)})
+    except Exception as exc:
+        log.error(f"List hotspots error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/hotspots/active", methods=["GET"])
+def active_hotspots():
+    """Get only active hotspots, sorted by severity."""
+    try:
+        hotspots = get_hotspot_summary(db)
+        return jsonify({"ok": True, "hotspots": hotspots, "count": len(hotspots)})
+    except Exception as exc:
+        log.error(f"Active hotspots error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/hotspots/<hotspot_id>", methods=["GET"])
+def get_hotspot_detail(hotspot_id):
+    """Get a single hotspot by ID."""
+    try:
+        hs = get_hotspot(db, hotspot_id)
+        if not hs:
+            return jsonify({"error": "Hotspot not found"}), 404
+        return jsonify({"ok": True, "hotspot": hs})
+    except Exception as exc:
+        log.error(f"Get hotspot error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/hotspots/detect", methods=["POST"])
+def trigger_hotspot_detection():
+    """
+    Manually trigger hotspot detection.
+    Optional JSON body: {lookback_hours: 24}
+    """
+    data = request.get_json(silent=True) or {}
+    lookback = data.get("lookback_hours", 24)
+    try:
+        result = detect_hotspots(db, lookback_hours=lookback)
+        return jsonify({"ok": True, **result})
+    except Exception as exc:
+        log.error(f"Hotspot detection error: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+# =============================================================================
 #  BACKGROUND WORKER  (every PROCESS_INTERVAL seconds)
 # =============================================================================
 
@@ -661,6 +726,7 @@ PROCESS_INTERVAL = int(os.environ.get("PROCESS_INTERVAL", 30))
 
 def _background_loop():
     """Runs forever in a daemon thread — processes pending rows on a timer."""
+    global _bg_cycle_count
     log.info(f"Background worker started  (interval={PROCESS_INTERVAL}s)")
     while True:
         try:
@@ -670,6 +736,18 @@ def _background_loop():
                     f"Background worker: {result['processed']} processed, "
                     f"{result['dropped']} dropped"
                 )
+
+            # Run hotspot detection every N cycles
+            _bg_cycle_count += 1
+            if _bg_cycle_count >= HOTSPOT_DETECT_INTERVAL:
+                _bg_cycle_count = 0
+                try:
+                    hs_result = detect_hotspots(db)
+                    if hs_result.get("created") or hs_result.get("resolved"):
+                        log.info(f"Hotspot detection: {hs_result}")
+                except Exception as hs_exc:
+                    log.error(f"Hotspot detection error: {hs_exc}")
+
         except Exception as exc:
             log.error(f"Background worker error: {exc}")
         time.sleep(PROCESS_INTERVAL)
